@@ -3,19 +3,21 @@ import { View, Text, KeyboardAvoidingView, Platform, Alert, StyleSheet } from 'r
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Link } from 'expo-router';
 import { supabase } from '@/lib/supabase';
+import { bootstrapNewUser } from '@/services/auth';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 
 export default function SignUpScreen() {
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function handleSignUp() {
-    if (!email || !password || !confirmPassword) {
+    if (!name.trim() || !email || !password || !confirmPassword) {
       Alert.alert('Missing fields', 'Please fill in all fields.');
       return;
     }
@@ -31,20 +33,44 @@ export default function SignUpScreen() {
     }
 
     setLoading(true);
-    const { error } = await supabase.auth.signUp({
+
+    // 1. Create the auth account
+    const { data: authData, error: authError } = await supabase.auth.signUp({
       email: email.trim(),
       password,
     });
+
+    if (authError) {
+      setLoading(false);
+      Alert.alert('Sign up failed', authError.message);
+      return;
+    }
+
+    // 2. Bootstrap household + profile if we got a user back
+    // (Supabase may return a user immediately if email confirmation is disabled)
+    if (authData.user) {
+      const result = await bootstrapNewUser(authData.user.id, name.trim());
+      if (!result.success) {
+        setLoading(false);
+        Alert.alert(
+          'Account created',
+          'Your account was created but we had trouble setting up your profile. Please sign in to retry.',
+        );
+        return;
+      }
+    }
+
     setLoading(false);
 
-    if (error) {
-      Alert.alert('Sign up failed', error.message);
-    } else {
-      Alert.alert(
-        'Check your email',
-        'We sent you a confirmation link. Please verify your email to continue.',
-      );
+    if (authData.session) {
+      // User is auto-signed-in (email confirmation disabled) — AuthGate will redirect
+      return;
     }
+
+    Alert.alert(
+      'Check your email',
+      'We sent you a confirmation link. Please verify your email to continue.',
+    );
   }
 
   return (
@@ -58,6 +84,15 @@ export default function SignUpScreen() {
             <Text style={styles.title}>Create Account</Text>
             <Text style={styles.subtitle}>Start managing your care today.</Text>
           </View>
+
+          <Input
+            label="Your Name"
+            placeholder="What should we call you?"
+            value={name}
+            onChangeText={setName}
+            autoCapitalize="words"
+            autoComplete="name"
+          />
 
           <Input
             label="Email"
