@@ -7,24 +7,7 @@ import { PROFILE_FACT_CATEGORIES } from '@/lib/types/profile';
 import type { ProfileFact, ProfileFactCategory } from '@/lib/types/profile';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
-
-function getFactDisplayValue(fact: ProfileFact): string {
-  const val = fact.value_json;
-  // Try common field patterns
-  if (typeof val === 'object' && val !== null) {
-    const name = (val as Record<string, unknown>).name
-      ?? (val as Record<string, unknown>).substance
-      ?? (val as Record<string, unknown>).provider
-      ?? (val as Record<string, unknown>).description
-      ?? (val as Record<string, unknown>).condition
-      ?? (val as Record<string, unknown>).relative;
-    if (typeof name === 'string') return name;
-    // Fallback: join all string values
-    const strings = Object.values(val).filter((v): v is string => typeof v === 'string');
-    if (strings.length > 0) return strings.join(' — ');
-  }
-  return String(val);
-}
+import { formatProfileFact } from '@/lib/utils/formatProfileFact';
 
 function groupFactsByCategory(facts: ProfileFact[]): Record<string, ProfileFact[]> {
   const grouped: Record<string, ProfileFact[]> = {};
@@ -131,21 +114,34 @@ function CategorySection({
 
       {facts.length > 0 ? (
         <Card>
-          {facts.map((fact, i) => (
-            <View key={fact.id}>
-              {i > 0 && <View style={styles.factDivider} />}
-              <View style={styles.factRow}>
-                <View style={styles.factContent}>
-                  <Text style={styles.factValue}>
-                    {getFactDisplayValue(fact)}
-                  </Text>
-                  {fact.verification_status === 'verified' && (
-                    <Text style={styles.verifiedBadge}>Verified</Text>
+          {facts.map((fact, i) => {
+            const formatted = formatProfileFact(fact);
+            return (
+              <View key={fact.id}>
+                {i > 0 && <View style={styles.factDivider} />}
+                <View style={styles.factRow}>
+                  <View style={styles.factContent}>
+                    <Text style={styles.factValue}>
+                      {formatted.title}
+                    </Text>
+                    {fact.verification_status === 'verified' && (
+                      <Text style={styles.verifiedBadge}>Verified</Text>
+                    )}
+                  </View>
+                  {formatted.details.length > 0 && (
+                    <View style={styles.factDetails}>
+                      {formatted.details.map((detail) => (
+                        <View key={detail.label} style={styles.detailRow}>
+                          <Text style={styles.detailLabel}>{detail.label}</Text>
+                          <Text style={styles.detailValue}>{detail.value}</Text>
+                        </View>
+                      ))}
+                    </View>
                   )}
                 </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
           <TouchableOpacity onPress={onAdd} style={styles.addMoreButton}>
             <Text style={styles.addMoreText}>+ Add more</Text>
           </TouchableOpacity>
@@ -253,6 +249,24 @@ const styles = StyleSheet.create({
     color: COLORS.success.DEFAULT,
     fontWeight: FONT_WEIGHTS.medium,
     marginLeft: 8,
+  },
+  factDetails: {
+    marginTop: 4,
+  },
+  detailRow: {
+    flexDirection: 'row',
+    paddingVertical: 2,
+  },
+  detailLabel: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.tertiary,
+    fontWeight: FONT_WEIGHTS.medium,
+    width: 120,
+  },
+  detailValue: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    flex: 1,
   },
   factDivider: {
     height: 1,

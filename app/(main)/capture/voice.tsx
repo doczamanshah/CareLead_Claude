@@ -86,10 +86,15 @@ export default function VoiceScreen() {
       });
 
       try {
-        await extractionMutation.mutateAsync({
+        const extraction = await extractionMutation.mutateAsync({
           artifactId: artifact.id,
           profileId: activeProfileId,
         });
+
+        if (extraction.intentSheetId) {
+          router.replace(`/(main)/intent-sheet/${extraction.intentSheetId}`);
+          return;
+        }
       } catch {
         // Extraction can be retried — don't block navigation
       }

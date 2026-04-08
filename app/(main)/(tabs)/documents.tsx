@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { DocumentCard } from '@/components/modules/DocumentCard';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useArtifacts } from '@/hooks/useArtifacts';
+import { usePendingIntentSheets } from '@/hooks/useIntentSheet';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { Artifact } from '@/lib/types/artifacts';
@@ -61,7 +62,26 @@ export default function DocumentsScreen() {
   const router = useRouter();
   const { activeProfileId } = useActiveProfile();
   const { data: artifacts, isLoading, error } = useArtifacts(activeProfileId ?? undefined);
+  const { data: pendingSheets } = usePendingIntentSheets(activeProfileId ?? undefined);
   const [sheetVisible, setSheetVisible] = useState(false);
+
+  // Build a lookup from artifact_id → intent_sheet_id for navigation
+  const artifactSheetMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const sheet of pendingSheets ?? []) {
+      if (sheet.artifact_id) {
+        map[sheet.artifact_id] = sheet.id;
+      }
+    }
+    return map;
+  }, [pendingSheets]);
+
+  function handleArtifactPress(artifact: Artifact) {
+    // If extraction is complete and has a pending intent sheet, navigate to review
+    if (artifact.processing_status === 'completed' && artifactSheetMap[artifact.id]) {
+      router.push(`/(main)/intent-sheet/${artifactSheetMap[artifact.id]}`);
+    }
+  }
 
   if (isLoading) return <ScreenLayout title="Documents" loading />;
   if (error) return <ScreenLayout title="Documents" error={error as Error} />;
@@ -84,7 +104,10 @@ export default function DocumentsScreen() {
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
             <View style={styles.cardWrap}>
-              <DocumentCard artifact={item} />
+              <DocumentCard
+                artifact={item}
+                onPress={() => handleArtifactPress(item)}
+              />
             </View>
           )}
           renderSectionHeader={({ section }) => (

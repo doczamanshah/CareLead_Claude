@@ -13,51 +13,73 @@ RULES:
 - Return ONLY valid JSON, no markdown fences, no commentary.
 - Identify the document type first, then extract every relevant field.
 - Text input may come from voice dictation and could be informal, conversational, or contain speech-to-text errors. Interpret intent generously.
-- Assign a confidence score (0.0–1.0) to each field based on how clearly you can read it.
-- Use the field_key naming convention: "category.field_name" (e.g., "insurance.payer_name").
+- Assign a confidence score (0.0–1.0) to each field based on how clearly you can read/interpret it.
 - If you cannot read a value clearly, still include it with a lower confidence score.
-- Never fabricate data. If something is not present in the image, do not include it.
+- Never fabricate data. If something is not present in the document, do not include it.
 
-DOCUMENT TYPES AND EXPECTED FIELDS:
+CRITICAL — CONTEXT-AWARE CATEGORIZATION:
+You MUST understand the user's INTENT, not just the words. Categorize based on what the user MEANS, not surface-level keyword matching.
 
-insurance_card:
-  insurance.payer_name, insurance.member_id, insurance.group_number,
-  insurance.rx_bin, insurance.rx_pcn, insurance.plan_type,
-  insurance.phone_member_services, insurance.phone_provider,
-  insurance.copay_primary, insurance.copay_specialist,
-  insurance.copay_emergency, insurance.deductible
+- If someone says "I'm allergic to X", "X causes Y side effect", "I had a bad reaction to X", or "I can't take X because it gives me Y" → that is an ALLERGY, not a medication. Use field_key "allergy.entry" with value {"substance": "X", "reaction": "Y"}.
+- If someone describes a medication they are CURRENTLY TAKING with a dose and frequency → that is a MEDICATION. Use field_key "medication.entry".
+- If someone says "I was diagnosed with X" or "I have X" → that is a CONDITION. Use field_key "condition.entry".
+- If someone describes a past surgery or procedure → that is a SURGERY. Use field_key "surgery.entry".
+- A drug name alone does NOT mean it's a current medication. Context matters: "lisinopril gives me a cough" = allergy. "I take lisinopril 10mg daily" = medication.
 
-medication_bottle:
-  medication.name, medication.generic_name, medication.dose,
-  medication.frequency, medication.quantity, medication.refills_remaining,
-  medication.prescriber, medication.pharmacy_name, medication.pharmacy_phone,
-  medication.rx_number, medication.date_filled, medication.expiration_date,
-  medication.instructions
+CRITICAL — STRUCTURED ENTRIES (ONE ITEM PER LOGICAL FACT):
+Each extracted field must represent ONE complete, meaningful fact — NOT fragments.
 
-lab_result:
-  lab.test_name, lab.result_value, lab.units, lab.reference_range,
-  lab.status, lab.date_collected, lab.date_reported,
-  lab.ordering_provider, lab.performing_lab
+DO NOT create separate entries for each sub-field of a single logical item.
+DO create ONE entry with a structured object value containing all related sub-fields.
 
-discharge_summary:
-  discharge.diagnoses, discharge.procedures, discharge.medications_at_discharge,
-  discharge.follow_up_appointments, discharge.instructions,
-  discharge.restrictions, discharge.admitting_provider,
-  discharge.discharge_date, discharge.admission_date
+WRONG (fragmented):
+  {"field_key": "medication.name", "value": "lisinopril"}
+  {"field_key": "medication.dose", "value": "25mg"}
+  {"field_key": "medication.frequency", "value": "once daily"}
 
-bill_eob:
-  billing.provider_name, billing.service_date, billing.billed_amount,
-  billing.insurance_paid, billing.patient_owes, billing.claim_number,
-  billing.account_number, billing.due_date, billing.service_description
+CORRECT (one structured entry):
+  {"field_key": "medication.entry", "value": {"drug_name": "lisinopril", "dose": "25mg", "frequency": "once daily"}}
 
-prescription:
-  medication.name, medication.dose, medication.frequency,
-  medication.quantity, medication.refills, medication.prescriber,
-  medication.date_written, medication.instructions
+WRONG (fragmented insurance):
+  {"field_key": "insurance.payer_name", "value": "Blue Cross"}
+  {"field_key": "insurance.member_id", "value": "XAD841976918"}
+  {"field_key": "insurance.group_number", "value": "82112"}
 
-general:
-  Extract whatever structured healthcare data is present using appropriate
-  category.field_name keys.
+CORRECT (one structured entry):
+  {"field_key": "insurance.entry", "value": {"payer_name": "Blue Cross", "member_id": "XAD841976918", "group_number": "82112"}}
+
+ENTRY STRUCTURES BY CATEGORY:
+
+medication.entry → {"drug_name", "generic_name", "dose", "frequency", "quantity", "refills_remaining", "prescriber", "pharmacy_name", "pharmacy_phone", "rx_number", "date_filled", "expiration_date", "instructions"}
+  Only include sub-fields that are present in the source.
+
+allergy.entry → {"substance", "reaction", "severity"}
+  substance = the allergen (drug, food, environmental)
+  reaction = what happens (rash, cough, anaphylaxis, etc.)
+  severity = mild/moderate/severe if mentioned
+
+condition.entry → {"name", "status", "diagnosed_date", "notes"}
+
+insurance.entry → {"payer_name", "member_id", "group_number", "rx_bin", "rx_pcn", "plan_type", "phone_member_services", "phone_provider", "copay_primary", "copay_specialist", "copay_emergency", "deductible"}
+
+care_team.entry → {"name", "specialty", "phone", "address", "fax", "notes"}
+
+pharmacy.entry → {"name", "phone", "address"}
+
+surgery.entry → {"name", "date", "hospital", "surgeon", "notes"}
+
+family_history.entry → {"condition", "relative", "notes"}
+
+emergency_contact.entry → {"name", "relationship", "phone"}
+
+lab.entry → {"test_name", "result_value", "units", "reference_range", "status", "date_collected", "date_reported", "ordering_provider", "performing_lab"}
+
+If multiple items exist in the same category (e.g., 3 medications), create 3 separate "medication.entry" fields — one per medication.
+
+DOCUMENT TYPES:
+insurance_card, medication_bottle, lab_result, discharge_summary, bill_eob, prescription, voice_note, general
+
+For voice_note and general types: extract whatever structured healthcare data is present using the entry structures above. Pay close attention to conversational context to determine the correct category.
 
 RESPONSE FORMAT:
 {
@@ -65,10 +87,10 @@ RESPONSE FORMAT:
   "confidence": <0.0-1.0 overall document classification confidence>,
   "fields": [
     {
-      "field_key": "category.field_name",
-      "value": "<extracted value>",
+      "field_key": "category.entry",
+      "value": { <structured object with relevant sub-fields> },
       "confidence": <0.0-1.0>,
-      "evidence": "<brief note about where in the document this was found>"
+      "evidence": "<brief note about where/how this was found>"
     }
   ]
 }`;
@@ -80,19 +102,6 @@ function getItemType(fieldKey: string): string {
   switch (category) {
     case "medication":
       return "medication";
-    case "lab":
-    case "discharge":
-    case "billing":
-      return "profile_fact";
-    case "insurance":
-    case "care_team":
-    case "pharmacy":
-    case "allergy":
-    case "condition":
-    case "surgery":
-    case "family_history":
-    case "emergency_contact":
-      return "profile_fact";
     default:
       return "profile_fact";
   }

@@ -16,10 +16,11 @@ const SOURCE_ICONS: Record<SourceChannel, string> = {
   manual: '✏️',
 };
 
-const STATUS_CONFIG: Record<ProcessingStatus, { label: string; color: string; bg: string }> = {
+const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   pending: { label: 'Processing...', color: COLORS.warning.DEFAULT, bg: COLORS.warning.light },
   processing: { label: 'Processing...', color: COLORS.warning.DEFAULT, bg: COLORS.warning.light },
-  completed: { label: 'Ready', color: COLORS.success.DEFAULT, bg: COLORS.success.light },
+  completed: { label: 'Review', color: COLORS.primary.DEFAULT, bg: '#E8F0ED' },
+  committed: { label: 'Done ✓', color: COLORS.success.DEFAULT, bg: COLORS.success.light },
   failed: { label: 'Failed', color: COLORS.error.DEFAULT, bg: COLORS.error.light },
 };
 

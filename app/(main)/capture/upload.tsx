@@ -77,13 +77,18 @@ export default function UploadScreen() {
         fileSizeBytes: pickedFile.size,
       });
 
-      // Trigger AI extraction — await to ensure the request fires before navigating
+      // Trigger AI extraction — navigate to intent sheet if successful
       try {
-        await extractionMutation.mutateAsync({
+        const extraction = await extractionMutation.mutateAsync({
           artifactId: artifact.id,
           profileId: activeProfileId,
         });
         console.log('[upload] Extraction triggered successfully for artifact', artifact.id);
+
+        if (extraction.intentSheetId) {
+          router.replace(`/(main)/intent-sheet/${extraction.intentSheetId}`);
+          return;
+        }
       } catch (extractionErr) {
         // Log but don't block navigation — extraction can be retried
         console.error('[upload] Extraction trigger failed:', extractionErr);
