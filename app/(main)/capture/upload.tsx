@@ -15,8 +15,6 @@ const ALLOWED_TYPES = [
   'application/pdf',
   'image/jpeg',
   'image/png',
-  'image/heic',
-  'image/heif',
 ];
 
 interface PickedFile {
@@ -43,10 +41,21 @@ export default function UploadScreen() {
       if (result.canceled || !result.assets?.length) return;
 
       const asset = result.assets[0];
+      const mime = asset.mimeType ?? 'application/octet-stream';
+
+      // Reject HEIC/HEIF — Claude API does not support these formats
+      if (mime === 'image/heic' || mime === 'image/heif') {
+        Alert.alert(
+          'Unsupported Format',
+          'HEIC/HEIF images are not supported. Please convert to JPEG or PNG and try again.',
+        );
+        return;
+      }
+
       setPickedFile({
         uri: asset.uri,
         name: asset.name,
-        mimeType: asset.mimeType ?? 'application/octet-stream',
+        mimeType: mime,
         size: asset.size ?? 0,
       });
     } catch {
@@ -109,7 +118,7 @@ export default function UploadScreen() {
               <Text style={styles.dropTitle}>Select a Document</Text>
               <Text style={styles.dropDesc}>
                 Choose a PDF or image file from your device. Supported formats:
-                PDF, JPEG, PNG, HEIC.
+                PDF, JPEG, PNG.
               </Text>
               <View style={styles.buttonWrap}>
                 <Button title="Browse Files" onPress={handlePick} />

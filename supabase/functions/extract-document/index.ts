@@ -7,11 +7,12 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
 const EXTRACTION_SYSTEM_PROMPT = `You are a healthcare document data extraction system for CareLead, a patient-owned care operations platform.
 
-Your job is to analyze images of healthcare documents and extract structured data.
+Your job is to analyze healthcare documents (images, scans, PDFs, or text notes/dictations) and extract structured data.
 
 RULES:
 - Return ONLY valid JSON, no markdown fences, no commentary.
 - Identify the document type first, then extract every relevant field.
+- Text input may come from voice dictation and could be informal, conversational, or contain speech-to-text errors. Interpret intent generously.
 - Assign a confidence score (0.0–1.0) to each field based on how clearly you can read it.
 - Use the field_key naming convention: "category.field_name" (e.g., "insurance.payer_name").
 - If you cannot read a value clearly, still include it with a lower confidence score.
@@ -138,66 +139,133 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // ── 2. Handle voice artifacts (skip extraction for now) ───────────────
-    if (artifact.source_channel === "voice") {
-      await supabase
+    // ── 2. Determine if this is a text-based artifact ───────────────────
+    const hasText = !!(artifact.ocr_text && artifact.ocr_text.trim());
+    const isTextArtifact =
+      hasText ||
+      artifact.artifact_type === "note" ||
+      artifact.mime_type === "text/plain";
+
+    // ── 3. Build Claude API messages based on artifact type ──────────────
+    let claudeMessages: Array<{ role: string; content: unknown }>;
+
+    if (isTextArtifact) {
+      // ── Text path: extract from ocr_text directly ───────────────────
+      const textContent = artifact.ocr_text?.trim();
+      if (!textContent) {
+        await markFailed(supabase, artifactId, "Text artifact has no content");
+        return new Response(
+          JSON.stringify({ error: "No text content to extract from" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      claudeMessages = [
+        {
+          role: "user",
+          content: `Extract all structured healthcare data from the following text. The text may be a voice dictation or typed note — it could be informal or conversational. Return JSON only.\n\n---\n${textContent}\n---`,
+        },
+      ];
+    } else {
+      // ── File path: download and send image/PDF to Claude ────────────
+      const { data: urlData, error: urlError } = await supabase.storage
         .from("artifacts")
-        .update({ processing_status: "completed", classification: "voice_note" })
-        .eq("id", artifactId);
+        .createSignedUrl(artifact.file_path, 600); // 10 min expiry
 
-      return new Response(
-        JSON.stringify({ message: "Voice artifacts are not yet supported for extraction", intentSheetId: null }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      if (urlError || !urlData?.signedUrl) {
+        await markFailed(supabase, artifactId, "Could not generate signed URL");
+        return new Response(
+          JSON.stringify({ error: "Could not access artifact file" }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      const mimeType = artifact.mime_type || "image/jpeg";
+      const supportedImageTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+      const isImage = supportedImageTypes.includes(mimeType);
+      const isPdf = mimeType === "application/pdf";
+      const isHeic = mimeType === "image/heic" || mimeType === "image/heif";
+
+      if (isHeic) {
+        await markFailed(supabase, artifactId, "HEIC/HEIF format is not supported");
+        return new Response(
+          JSON.stringify({
+            error: "HEIC/HEIF format is not supported. Please upload a JPEG or PNG image instead.",
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      if (!isImage && !isPdf) {
+        await markFailed(supabase, artifactId, `Unsupported file type: ${mimeType}`);
+        return new Response(
+          JSON.stringify({ error: `Unsupported file type: ${mimeType}` }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB limit
+
+      const fileResponse = await fetch(urlData.signedUrl);
+      if (!fileResponse.ok) {
+        await markFailed(supabase, artifactId, "Could not download artifact file");
+        return new Response(
+          JSON.stringify({ error: "Could not download artifact file" }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      const contentLength = fileResponse.headers.get("content-length");
+      if (contentLength && parseInt(contentLength, 10) > MAX_FILE_SIZE) {
+        await markFailed(supabase, artifactId, `File too large: ${contentLength} bytes`);
+        return new Response(
+          JSON.stringify({ error: "File too large. Maximum size is 20 MB." }),
+          { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      const fileBuffer = await fileResponse.arrayBuffer();
+      if (fileBuffer.byteLength > MAX_FILE_SIZE) {
+        await markFailed(supabase, artifactId, `File too large: ${fileBuffer.byteLength} bytes`);
+        return new Response(
+          JSON.stringify({ error: "File too large. Maximum size is 20 MB." }),
+          { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      const base64Data = btoa(
+        new Uint8Array(fileBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
       );
+
+      let contentBlock: Record<string, unknown>;
+      if (isPdf) {
+        contentBlock = {
+          type: "document",
+          source: { type: "base64", media_type: "application/pdf", data: base64Data },
+        };
+      } else {
+        contentBlock = {
+          type: "image",
+          source: { type: "base64", media_type: mimeType, data: base64Data },
+        };
+      }
+
+      const userPrompt = isPdf
+        ? "Extract all structured healthcare data from this document. Return JSON only."
+        : "Extract all structured healthcare data from this document image. Return JSON only.";
+
+      claudeMessages = [
+        {
+          role: "user",
+          content: [
+            contentBlock,
+            { type: "text", text: userPrompt },
+          ],
+        },
+      ];
     }
 
-    // ── 3. Get signed URL for the file ────────────────────────────────────
-    const { data: urlData, error: urlError } = await supabase.storage
-      .from("artifacts")
-      .createSignedUrl(artifact.file_path, 600); // 10 min expiry
-
-    if (urlError || !urlData?.signedUrl) {
-      await markFailed(supabase, artifactId, "Could not generate signed URL");
-      return new Response(
-        JSON.stringify({ error: "Could not access artifact file" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    // ── 4. Fetch the image and convert to base64 ──────────────────────────
-    const imageResponse = await fetch(urlData.signedUrl);
-    if (!imageResponse.ok) {
-      await markFailed(supabase, artifactId, "Could not download artifact file");
-      return new Response(
-        JSON.stringify({ error: "Could not download artifact file" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    const imageBuffer = await imageResponse.arrayBuffer();
-    const base64Image = btoa(
-      new Uint8Array(imageBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ""),
-    );
-
-    // Determine media type for the Claude API
-    const mimeType = artifact.mime_type || "image/jpeg";
-    const supportedImageTypes = ["image/jpeg", "image/png", "image/gif", "image/webp"];
-    const mediaType = supportedImageTypes.includes(mimeType) ? mimeType : "image/jpeg";
-
-    // For PDFs, we can't send as image — mark as needing OCR pipeline (future)
-    if (mimeType === "application/pdf") {
-      await supabase
-        .from("artifacts")
-        .update({ processing_status: "completed", classification: "pdf_document" })
-        .eq("id", artifactId);
-
-      return new Response(
-        JSON.stringify({ message: "PDF extraction not yet supported", intentSheetId: null }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-
-    // ── 5. Call Claude API for extraction ──────────────────────────────────
+    // ── 4. Call Claude API for extraction ──────────────────────────────────
     const claudeResponse = await fetch(ANTHROPIC_API_URL, {
       method: "POST",
       headers: {
@@ -209,25 +277,7 @@ Deno.serve(async (req: Request) => {
         model: "claude-sonnet-4-20250514",
         max_tokens: 4096,
         system: EXTRACTION_SYSTEM_PROMPT,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mediaType,
-                  data: base64Image,
-                },
-              },
-              {
-                type: "text",
-                text: "Extract all structured healthcare data from this document image. Return JSON only.",
-              },
-            ],
-          },
-        ],
+        messages: claudeMessages,
       }),
     });
 
@@ -243,7 +293,7 @@ Deno.serve(async (req: Request) => {
 
     const claudeResult = await claudeResponse.json();
 
-    // Extract the text content from Claude's response
+    // ── 5. Parse Claude response ─────────────────────────────────────────
     const textBlock = claudeResult.content?.find(
       (block: { type: string }) => block.type === "text",
     );
@@ -339,7 +389,7 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // ── 8. Create intent items from extracted fields ──────────────────────
+    // ── 8. Create intent items from extracted fields ─────────────────────
     const intentItemRows = fields.map((f) => ({
       intent_sheet_id: intentSheet.id,
       profile_id: profileId,
@@ -361,7 +411,7 @@ Deno.serve(async (req: Request) => {
       // so user can see something happened
     }
 
-    // ── 9. Update artifact as completed ───────────────────────────────────
+    // ── 9. Update artifact as completed ──────────────────────────────────
     await supabase
       .from("artifacts")
       .update({

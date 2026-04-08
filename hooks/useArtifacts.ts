@@ -3,8 +3,9 @@ import {
   fetchArtifacts,
   fetchArtifactDetail,
   uploadArtifact,
+  createNoteArtifact,
 } from '@/services/artifacts';
-import type { UploadArtifactParams } from '@/lib/types/artifacts';
+import type { UploadArtifactParams, CreateNoteArtifactParams } from '@/lib/types/artifacts';
 
 export function useArtifacts(profileId: string | undefined) {
   return useQuery({
@@ -38,6 +39,23 @@ export function useUploadArtifact() {
   return useMutation({
     mutationFn: async (params: UploadArtifactParams) => {
       const result = await uploadArtifact(params);
+      if (!result.success) throw new Error(result.error);
+      return result.data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: ['artifacts', 'list', variables.profileId],
+      });
+    },
+  });
+}
+
+export function useCreateNoteArtifact() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (params: CreateNoteArtifactParams) => {
+      const result = await createNoteArtifact(params);
       if (!result.success) throw new Error(result.error);
       return result.data;
     },

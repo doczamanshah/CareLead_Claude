@@ -31,7 +31,11 @@ export default function CameraScreen() {
 
   async function handleCapture() {
     if (!cameraRef.current) return;
-    const photo = await cameraRef.current.takePictureAsync({ quality: 0.8 });
+    const photo = await cameraRef.current.takePictureAsync({
+      quality: 0.8,
+      // Force JPEG output — Claude API does not support HEIC (iPhone default)
+      imageType: 'jpg',
+    });
     if (photo?.uri) {
       setPhotoUri(photo.uri);
     }

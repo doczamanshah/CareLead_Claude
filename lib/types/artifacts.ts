@@ -36,3 +36,10 @@ export interface UploadArtifactParams {
   fileSizeBytes: number;
   metadata?: Record<string, unknown>;
 }
+
+export interface CreateNoteArtifactParams {
+  profileId: string;
+  title: string;
+  text: string;
+  sourceChannel: SourceChannel;
+}

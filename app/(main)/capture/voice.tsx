@@ -1,288 +1,185 @@
 import { useState, useRef, useEffect } from 'react';
-import { View, Text, TouchableOpacity, Alert, StyleSheet } from 'react-native';
-import { Audio } from 'expo-av';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  Alert,
+  StyleSheet,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
 import { useRouter } from 'expo-router';
-import * as FileSystem from 'expo-file-system/legacy';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/components/ui/Button';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { useUploadArtifact } from '@/hooks/useArtifacts';
+import { useCreateNoteArtifact } from '@/hooks/useArtifacts';
 import { useTriggerExtraction } from '@/hooks/useIntentSheet';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 
-type RecordingState = 'idle' | 'recording' | 'recorded';
+const EXAMPLE_PROMPTS = [
+  'After my visit today...',
+  'My medications are...',
+  "I'm allergic to...",
+  'My doctor said...',
+];
 
 export default function VoiceScreen() {
   const router = useRouter();
   const { activeProfileId } = useActiveProfile();
-  const uploadMutation = useUploadArtifact();
+  const createNoteMutation = useCreateNoteArtifact();
   const extractionMutation = useTriggerExtraction();
 
-  const [state, setState] = useState<RecordingState>('idle');
-  const [durationMs, setDurationMs] = useState(0);
-  const [recordingUri, setRecordingUri] = useState<string | null>(null);
-  const [permissionGranted, setPermissionGranted] = useState<boolean | null>(null);
+  const [transcript, setTranscript] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const inputRef = useRef<TextInput>(null);
 
-  const recordingRef = useRef<Audio.Recording | null>(null);
-  const soundRef = useRef<Audio.Sound | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const wordCount = transcript.trim() ? transcript.trim().split(/\s+/).length : 0;
+  const hasText = transcript.trim().length > 0;
 
+  // Track keyboard visibility for showing/hiding example prompts
   useEffect(() => {
-    checkPermission();
+    const showSub = Keyboard.addListener('keyboardDidShow', () => setIsKeyboardVisible(true));
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => setIsKeyboardVisible(false));
     return () => {
-      // Cleanup on unmount
-      if (recordingRef.current) {
-        recordingRef.current.stopAndUnloadAsync().catch(() => {});
-      }
-      if (soundRef.current) {
-        soundRef.current.unloadAsync().catch(() => {});
-      }
+      showSub.remove();
+      hideSub.remove();
     };
   }, []);
 
-  async function checkPermission() {
-    const { granted } = await Audio.getPermissionsAsync();
-    if (granted) {
-      setPermissionGranted(true);
-    } else {
-      const result = await Audio.requestPermissionsAsync();
-      setPermissionGranted(result.granted);
-    }
+  function handleClear() {
+    Alert.alert('Clear Text', 'Discard your current text?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: () => {
+          setTranscript('');
+          inputRef.current?.focus();
+        },
+      },
+    ]);
   }
 
-  async function startRecording() {
+  function handlePromptTap(prompt: string) {
+    setTranscript(prompt);
+    inputRef.current?.focus();
+  }
+
+  async function handleExtract() {
+    if (!hasText || !activeProfileId) return;
+
+    Keyboard.dismiss();
+    setIsSaving(true);
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
-
-      recordingRef.current = recording;
-      setState('recording');
-      setDurationMs(0);
-
-      recording.setOnRecordingStatusUpdate((status) => {
-        if (status.isRecording) {
-          setDurationMs(status.durationMillis);
-        }
-      });
-    } catch {
-      Alert.alert('Error', 'Could not start recording.');
-    }
-  }
-
-  async function stopRecording() {
-    if (!recordingRef.current) return;
-
-    try {
-      await recordingRef.current.stopAndUnloadAsync();
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
-
-      const uri = recordingRef.current.getURI();
-      recordingRef.current = null;
-
-      if (uri) {
-        setRecordingUri(uri);
-        setState('recorded');
-      } else {
-        setState('idle');
-      }
-    } catch {
-      Alert.alert('Error', 'Could not stop recording.');
-      setState('idle');
-    }
-  }
-
-  async function handlePlayback() {
-    if (!recordingUri) return;
-
-    if (isPlaying && soundRef.current) {
-      await soundRef.current.pauseAsync();
-      setIsPlaying(false);
-      return;
-    }
-
-    try {
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-      }
-
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: recordingUri },
-        { shouldPlay: true },
-      );
-
-      soundRef.current = sound;
-      setIsPlaying(true);
-
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          setIsPlaying(false);
-        }
-      });
-    } catch {
-      Alert.alert('Error', 'Could not play recording.');
-    }
-  }
-
-  function handleDiscard() {
-    setRecordingUri(null);
-    setDurationMs(0);
-    setState('idle');
-    if (soundRef.current) {
-      soundRef.current.unloadAsync().catch(() => {});
-      soundRef.current = null;
-    }
-  }
-
-  async function handleSave() {
-    if (!recordingUri || !activeProfileId) return;
-
-    try {
-      const fileInfo = await FileSystem.getInfoAsync(recordingUri);
-      const fileSize = fileInfo.exists ? (fileInfo.size ?? 0) : 0;
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const fileName = `voice-${timestamp}.m4a`;
+      const title = `voice-note-${timestamp}`;
 
-      const artifact = await uploadMutation.mutateAsync({
+      const artifact = await createNoteMutation.mutateAsync({
         profileId: activeProfileId,
-        fileName,
-        fileUri: recordingUri,
-        mimeType: 'audio/mp4',
-        artifactType: 'note',
+        title,
+        text: transcript.trim(),
         sourceChannel: 'voice',
-        fileSizeBytes: fileSize,
       });
 
-      // Trigger extraction — await to ensure the request fires before navigating
       try {
         await extractionMutation.mutateAsync({
           artifactId: artifact.id,
           profileId: activeProfileId,
         });
-        console.log('[voice] Extraction triggered successfully for artifact', artifact.id);
-      } catch (extractionErr) {
-        // Log but don't block navigation — extraction can be retried
-        console.error('[voice] Extraction trigger failed:', extractionErr);
+      } catch {
+        // Extraction can be retried — don't block navigation
       }
 
       router.replace('/(main)/(tabs)/documents');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed';
-      Alert.alert('Upload Error', message);
+      const message = err instanceof Error ? err.message : 'Save failed';
+      Alert.alert('Error', message);
+    } finally {
+      setIsSaving(false);
     }
-  }
-
-  function formatDuration(ms: number): string {
-    const totalSeconds = Math.floor(ms / 1000);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-  }
-
-  // Permission check
-  if (permissionGranted === null) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.centered}>
-          <Text style={styles.loadingText}>Checking microphone access...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  if (!permissionGranted) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.centered}>
-          <Text style={styles.permissionTitle}>Microphone Access Required</Text>
-          <Text style={styles.permissionDesc}>
-            CareLead needs microphone access to record voice notes about your
-            health information.
-          </Text>
-          <Button title="Grant Microphone Access" onPress={checkPermission} />
-        </View>
-      </SafeAreaView>
-    );
   }
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <View style={styles.content}>
-        {/* Timer display */}
-        <View style={styles.timerSection}>
-          <Text style={styles.timer}>{formatDuration(durationMs)}</Text>
-          {state === 'recording' && (
-            <View style={styles.recordingIndicator}>
-              <View style={styles.recordingDot} />
-              <Text style={styles.recordingLabel}>Recording</Text>
-            </View>
-          )}
-          {state === 'recorded' && (
-            <Text style={styles.recordedLabel}>Recording complete</Text>
-          )}
-          {state === 'idle' && (
-            <Text style={styles.idleLabel}>Tap the microphone to start</Text>
-          )}
-        </View>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
+      >
+        <View style={styles.content}>
+          {/* Minimal header */}
+          <View style={styles.header}>
+            <Text style={styles.title}>Voice Note</Text>
+            <Text style={styles.subtitle}>
+              Speak using the mic button on your keyboard, or type directly.
+            </Text>
+          </View>
 
-        {/* Main action button */}
-        <View style={styles.micSection}>
-          {state === 'idle' && (
-            <TouchableOpacity
-              style={styles.micButton}
-              onPress={startRecording}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.micIcon}>🎙️</Text>
-            </TouchableOpacity>
-          )}
-
-          {state === 'recording' && (
-            <TouchableOpacity
-              style={[styles.micButton, styles.micButtonRecording]}
-              onPress={stopRecording}
-              activeOpacity={0.7}
-            >
-              <View style={styles.stopIcon} />
-            </TouchableOpacity>
-          )}
-
-          {state === 'recorded' && (
-            <TouchableOpacity
-              style={[styles.micButton, styles.micButtonPlayback]}
-              onPress={handlePlayback}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.playbackIcon}>
-                {isPlaying ? '⏸' : '▶️'}
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        {/* Bottom actions */}
-        {state === 'recorded' && (
-          <View style={styles.bottomActions}>
-            <Button
-              title="Discard"
-              variant="outline"
-              onPress={handleDiscard}
-            />
-            <View style={styles.gap} />
-            <Button
-              title="Save Voice Note"
-              onPress={handleSave}
-              loading={uploadMutation.isPending}
+          {/* Single text area with inline clear button */}
+          <View style={styles.inputWrapper}>
+            {hasText && (
+              <TouchableOpacity style={styles.clearButton} onPress={handleClear}>
+                <Text style={styles.clearButtonText}>Clear</Text>
+              </TouchableOpacity>
+            )}
+            <TextInput
+              ref={inputRef}
+              style={styles.textInput}
+              value={transcript}
+              onChangeText={setTranscript}
+              placeholder="Tap here and speak or type your health info..."
+              placeholderTextColor={COLORS.text.tertiary}
+              multiline
+              textAlignVertical="top"
+              autoFocus={false}
+              returnKeyType="default"
+              blurOnSubmit={false}
             />
           </View>
-        )}
-      </View>
+
+          {/* Word count */}
+          <Text style={styles.wordCount}>
+            {hasText ? `${wordCount} ${wordCount === 1 ? 'word' : 'words'}` : ' '}
+          </Text>
+
+          {/* Example prompts — only when keyboard is hidden and no text entered */}
+          {!isKeyboardVisible && !hasText && (
+            <View style={styles.promptsSection}>
+              <Text style={styles.promptsLabel}>Try saying something like:</Text>
+              <View style={styles.promptsRow}>
+                {EXAMPLE_PROMPTS.map((prompt) => (
+                  <TouchableOpacity
+                    key={prompt}
+                    style={styles.promptChip}
+                    onPress={() => handlePromptTap(prompt)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.promptChipText}>{prompt}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* Spacer pushes button to bottom */}
+          <View style={styles.flex} />
+        </View>
+
+        {/* Floating extract button — always visible above keyboard */}
+        <View style={styles.bottomBar}>
+          <Button
+            title="Extract Health Info"
+            onPress={handleExtract}
+            loading={isSaving}
+            disabled={!hasText || !activeProfileId}
+            size="lg"
+          />
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -292,109 +189,97 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background.DEFAULT,
   },
+  flex: {
+    flex: 1,
+  },
   content: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 24,
+    paddingHorizontal: 20,
+    paddingTop: 16,
   },
-  centered: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
+  header: {
+    marginBottom: 20,
   },
-  loadingText: {
-    fontSize: FONT_SIZES.base,
-    color: COLORS.text.secondary,
-  },
-  permissionTitle: {
-    fontSize: FONT_SIZES.xl,
-    fontWeight: FONT_WEIGHTS.semibold,
-    color: COLORS.text.DEFAULT,
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  permissionDesc: {
-    fontSize: FONT_SIZES.base,
-    color: COLORS.text.secondary,
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 22,
-  },
-  timerSection: {
-    alignItems: 'center',
-    marginTop: 60,
-  },
-  timer: {
-    fontSize: 64,
+  title: {
+    fontSize: FONT_SIZES['2xl'],
     fontWeight: FONT_WEIGHTS.bold,
     color: COLORS.text.DEFAULT,
-    fontVariant: ['tabular-nums'],
+    marginBottom: 4,
   },
-  recordingIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 12,
+  subtitle: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    lineHeight: 20,
   },
-  recordingDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: COLORS.error.DEFAULT,
-    marginRight: 8,
+  inputWrapper: {
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border.DEFAULT,
+    minHeight: 220,
+    position: 'relative',
   },
-  recordingLabel: {
-    fontSize: FONT_SIZES.base,
-    color: COLORS.error.DEFAULT,
+  clearButton: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    zIndex: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: COLORS.surface.muted,
+  },
+  clearButtonText: {
+    fontSize: FONT_SIZES.xs,
     fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.secondary,
   },
-  recordedLabel: {
+  textInput: {
     fontSize: FONT_SIZES.base,
-    color: COLORS.success.DEFAULT,
-    fontWeight: FONT_WEIGHTS.medium,
-    marginTop: 12,
+    color: COLORS.text.DEFAULT,
+    padding: 16,
+    paddingTop: 16,
+    paddingRight: 70,
+    minHeight: 220,
+    lineHeight: 24,
   },
-  idleLabel: {
-    fontSize: FONT_SIZES.base,
+  wordCount: {
+    fontSize: FONT_SIZES.xs,
     color: COLORS.text.tertiary,
-    marginTop: 12,
+    textAlign: 'right',
+    marginTop: 8,
+    marginBottom: 4,
   },
-  micSection: {
-    alignItems: 'center',
+  promptsSection: {
+    marginTop: 16,
   },
-  micButton: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    backgroundColor: COLORS.primary.DEFAULT,
-    alignItems: 'center',
-    justifyContent: 'center',
+  promptsLabel: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    marginBottom: 10,
   },
-  micButtonRecording: {
-    backgroundColor: COLORS.error.DEFAULT,
-  },
-  micButtonPlayback: {
-    backgroundColor: COLORS.secondary.DEFAULT,
-  },
-  micIcon: {
-    fontSize: 40,
-  },
-  stopIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 4,
-    backgroundColor: '#fff',
-  },
-  playbackIcon: {
-    fontSize: 36,
-  },
-  bottomActions: {
+  promptsRow: {
     flexDirection: 'row',
-    width: '100%',
-    gap: 12,
+    flexWrap: 'wrap',
+    gap: 8,
   },
-  gap: {
-    width: 12,
+  promptChip: {
+    backgroundColor: COLORS.primary.DEFAULT + '0A',
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '20',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  promptChipText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.primary.DEFAULT,
+  },
+  bottomBar: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border.light,
+    backgroundColor: COLORS.background.DEFAULT,
   },
 });

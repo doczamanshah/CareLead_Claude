@@ -15,6 +15,7 @@ import { APP_CONFIG } from '@/lib/constants/config';
 import type {
   Artifact,
   ArtifactWithUrl,
+  CreateNoteArtifactParams,
   UploadArtifactParams,
 } from '@/lib/types/artifacts';
 
@@ -102,6 +103,39 @@ export async function uploadArtifact(
   }
 
   return { success: true, data: updated as Artifact };
+}
+
+/**
+ * Create a text-only note artifact (no file upload).
+ * The transcript is stored directly in the ocr_text column so the
+ * extraction Edge Function can read it without downloading a file.
+ */
+export async function createNoteArtifact(
+  params: CreateNoteArtifactParams,
+): Promise<ServiceResult<Artifact>> {
+  const { profileId, title, text, sourceChannel } = params;
+
+  const { data, error } = await supabase
+    .from('artifacts')
+    .insert({
+      profile_id: profileId,
+      artifact_type: 'note' as const,
+      source_channel: sourceChannel,
+      file_name: title,
+      file_path: '',
+      mime_type: 'text/plain',
+      file_size: text.length,
+      processing_status: 'pending',
+      ocr_text: text,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return { success: false, error: error.message, code: error.code };
+  }
+
+  return { success: true, data: data as Artifact };
 }
 
 /**
