@@ -8,9 +8,9 @@ import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 
 const QUICK_ACTIONS = [
+  { key: 'camera', icon: '📷', label: 'Take\nPhoto', route: '/(main)/capture/camera' },
   { key: 'document', icon: '📄', label: 'Add\nDocument', route: '/(main)/capture/upload' },
   { key: 'voice', icon: '🎙️', label: 'Record\nVoice Note', route: '/(main)/capture/voice' },
-  { key: 'medication', icon: '💊', label: 'Add\nMedication', route: null },
   { key: 'appointment', icon: '📅', label: 'New\nAppointment', route: null },
 ] as const;
 
