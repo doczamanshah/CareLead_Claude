@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useUploadArtifact } from '@/hooks/useArtifacts';
+import { useTriggerExtraction } from '@/hooks/useIntentSheet';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 
@@ -29,6 +30,7 @@ export default function UploadScreen() {
   const router = useRouter();
   const { activeProfileId } = useActiveProfile();
   const uploadMutation = useUploadArtifact();
+  const extractionMutation = useTriggerExtraction();
   const [pickedFile, setPickedFile] = useState<PickedFile | null>(null);
 
   async function handlePick() {
@@ -56,7 +58,7 @@ export default function UploadScreen() {
     if (!pickedFile || !activeProfileId) return;
 
     try {
-      await uploadMutation.mutateAsync({
+      const artifact = await uploadMutation.mutateAsync({
         profileId: activeProfileId,
         fileName: pickedFile.name,
         fileUri: pickedFile.uri,
@@ -65,6 +67,18 @@ export default function UploadScreen() {
         sourceChannel: 'upload',
         fileSizeBytes: pickedFile.size,
       });
+
+      // Trigger AI extraction — await to ensure the request fires before navigating
+      try {
+        await extractionMutation.mutateAsync({
+          artifactId: artifact.id,
+          profileId: activeProfileId,
+        });
+        console.log('[upload] Extraction triggered successfully for artifact', artifact.id);
+      } catch (extractionErr) {
+        // Log but don't block navigation — extraction can be retried
+        console.error('[upload] Extraction trigger failed:', extractionErr);
+      }
 
       router.replace('/(main)/(tabs)/documents');
     } catch (err) {

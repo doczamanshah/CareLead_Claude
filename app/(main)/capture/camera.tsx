@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button } from '@/components/ui/Button';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useUploadArtifact } from '@/hooks/useArtifacts';
+import { useTriggerExtraction } from '@/hooks/useIntentSheet';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 
@@ -22,6 +23,7 @@ export default function CameraScreen() {
   const router = useRouter();
   const { activeProfileId } = useActiveProfile();
   const uploadMutation = useUploadArtifact();
+  const extractionMutation = useTriggerExtraction();
 
   const [permission, requestPermission] = useCameraPermissions();
   const [photoUri, setPhotoUri] = useState<string | null>(null);
@@ -44,7 +46,7 @@ export default function CameraScreen() {
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const fileName = `photo-${timestamp}.jpg`;
 
-      await uploadMutation.mutateAsync({
+      const artifact = await uploadMutation.mutateAsync({
         profileId: activeProfileId,
         fileName,
         fileUri: photoUri,
@@ -53,6 +55,18 @@ export default function CameraScreen() {
         sourceChannel: 'camera',
         fileSizeBytes: fileSize,
       });
+
+      // Trigger AI extraction — await to ensure the request fires before navigating
+      try {
+        await extractionMutation.mutateAsync({
+          artifactId: artifact.id,
+          profileId: activeProfileId,
+        });
+        console.log('[camera] Extraction triggered successfully for artifact', artifact.id);
+      } catch (extractionErr) {
+        // Log but don't block navigation — extraction can be retried
+        console.error('[camera] Extraction trigger failed:', extractionErr);
+      }
 
       router.replace('/(main)/(tabs)/documents');
     } catch (err) {
