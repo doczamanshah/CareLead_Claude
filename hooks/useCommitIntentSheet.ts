@@ -1,25 +1,31 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { commitIntentSheet, updateIntentItemStatus } from '@/services/commit';
+import type { CommitSummary } from '@/services/commit';
 
 /**
  * Mutation to commit all accepted/edited intent items for an intent sheet.
+ * Care guidance level is now fetched internally by the commit engine.
  * Invalidates profile, artifact, intent sheet, and task queries on success.
  */
 export function useCommitIntentSheet() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (intentSheetId: string) => {
+    mutationFn: async ({
+      intentSheetId,
+    }: {
+      intentSheetId: string;
+    }) => {
       const result = await commitIntentSheet(intentSheetId);
       if (!result.success) throw new Error(result.error);
       return result.data;
     },
-    onSuccess: (_data, intentSheetId) => {
-      // Invalidate everything that may have changed
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['intentSheets'] });
       queryClient.invalidateQueries({ queryKey: ['artifacts'] });
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      queryClient.invalidateQueries({ queryKey: ['profileGaps'] });
     },
   });
 }
@@ -49,3 +55,5 @@ export function useUpdateIntentItemStatus() {
     },
   });
 }
+
+export type { CommitSummary };

@@ -1,22 +1,262 @@
+import { useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
 import { ProfileCard } from '@/components/modules/ProfileCard';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { useTasks, useUpdateTaskStatus, useCreateTask } from '@/hooks/useTasks';
+import { useProactiveChecks } from '@/hooks/useProactiveChecks';
+import { useWeeklyDigest } from '@/hooks/usePreferences';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import type { Task, ProactiveSuggestion } from '@/lib/types/tasks';
+import { PRIORITY_ORDER } from '@/lib/types/tasks';
 
 const QUICK_ACTIONS = [
-  { key: 'camera', icon: '📷', label: 'Take\nPhoto', route: '/(main)/capture/camera' },
-  { key: 'document', icon: '📄', label: 'Add\nDocument', route: '/(main)/capture/upload' },
-  { key: 'voice', icon: '🎙️', label: 'Record\nVoice Note', route: '/(main)/capture/voice' },
-  { key: 'appointment', icon: '📅', label: 'New\nAppointment', route: null },
+  { key: 'camera', icon: '\uD83D\uDCF7', label: 'Take\nPhoto', route: '/(main)/capture/camera' },
+  { key: 'document', icon: '\uD83D\uDCC4', label: 'Add\nDocument', route: '/(main)/capture/upload' },
+  { key: 'voice', icon: '\uD83C\uDF99\uFE0F', label: 'Record\nVoice Note', route: '/(main)/capture/voice' },
+  { key: 'task', icon: '\u2705', label: 'New\nTask', route: '/(main)/tasks/create' },
 ] as const;
+
+const MAX_TODAY_ITEMS = 3;
+const TWO_WEEKS_MS = 14 * 24 * 60 * 60 * 1000;
+
+function isOverdue(task: Task): boolean {
+  if (!task.due_date) return false;
+  return new Date(task.due_date) < new Date();
+}
+
+function isDueWithinTwoWeeks(task: Task): boolean {
+  if (!task.due_date) return true; // no due date = always relevant
+  const dueTime = new Date(task.due_date).getTime();
+  const cutoff = Date.now() + TWO_WEEKS_MS;
+  return dueTime <= cutoff;
+}
+
+function formatDueDate(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Tomorrow';
+  if (diffDays < 0) return `${Math.abs(diffDays)}d overdue`;
+  if (diffDays <= 7) return `In ${diffDays}d`;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+const PRIORITY_COLORS: Record<string, string> = {
+  urgent: COLORS.error.DEFAULT,
+  high: COLORS.tertiary.DEFAULT,
+  medium: COLORS.accent.dark,
+  low: COLORS.secondary.DEFAULT,
+};
+
+function addDays(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  date.setHours(17, 0, 0, 0);
+  return date.toISOString();
+}
+
+/** Group chained tasks by their parent_task_id or trigger_source prefix */
+interface ChainGroup {
+  id: string;
+  chainName: string;
+  tasks: Task[];
+  completedCount: number;
+  totalCount: number;
+  nextStep: Task;
+}
+
+type TodayItem = { type: 'task'; task: Task } | { type: 'chain'; chain: ChainGroup };
+
+function isMonday(): boolean {
+  return new Date().getDay() === 1;
+}
 
 export default function HomeScreen() {
   const { activeProfile, activeProfileId, profiles, switchProfile } = useActiveProfile();
   const router = useRouter();
+
+  const { data: openTasks } = useTasks(activeProfileId, {
+    status: ['pending', 'in_progress'],
+  });
+
+  const { data: completedTasks } = useTasks(activeProfileId, {
+    status: ['completed'],
+  });
+
+  const updateStatus = useUpdateTaskStatus();
+  const createTaskMutation = useCreateTask();
+
+  const { suggestions, dismissSuggestion } = useProactiveChecks(activeProfileId);
+  const { enabled: weeklyDigestEnabled } = useWeeklyDigest();
+
+  // Build chain groups and individual tasks, filtered for "Today" view
+  const { todayItems, chainGroups, overdueCount, totalOpen, remainingCount } = useMemo(() => {
+    if (!openTasks) {
+      return { todayItems: [] as TodayItem[], chainGroups: [] as ChainGroup[], overdueCount: 0, totalOpen: 0, remainingCount: 0 };
+    }
+
+    // Filter out blocked tasks and tasks due 2+ weeks from now
+    const relevantTasks = openTasks.filter(
+      (t) => t.dependency_status !== 'blocked' && isDueWithinTwoWeeks(t),
+    );
+
+    // Group chained tasks
+    const chainMap = new Map<string, Task[]>();
+    const individualTasks: Task[] = [];
+
+    for (const task of relevantTasks) {
+      if (task.parent_task_id) {
+        const chainKey = task.parent_task_id;
+        if (!chainMap.has(chainKey)) chainMap.set(chainKey, []);
+        chainMap.get(chainKey)!.push(task);
+      } else {
+        // Check if this task IS a parent (has children in the list)
+        const children = relevantTasks.filter((t) => t.parent_task_id === task.id);
+        if (children.length > 0) {
+          // This is a chain parent — it will be grouped with its children
+          const chainKey = task.id;
+          if (!chainMap.has(chainKey)) chainMap.set(chainKey, []);
+          chainMap.get(chainKey)!.unshift(task);
+        } else {
+          individualTasks.push(task);
+        }
+      }
+    }
+
+    // Build chain groups
+    const groups: ChainGroup[] = [];
+    for (const [parentId, tasks] of chainMap) {
+      const sorted = tasks.sort((a, b) => (a.chain_order ?? 0) - (b.chain_order ?? 0));
+      const nextStep = sorted.find(
+        (t) => t.status === 'pending' || t.status === 'in_progress',
+      ) ?? sorted[0];
+      const completedCount = sorted.filter((t) => t.status === 'completed').length;
+
+      // Derive chain name from trigger_source
+      const triggerSource = sorted[0]?.trigger_source ?? '';
+      const chainName = triggerSource || `Action Plan`;
+
+      groups.push({
+        id: parentId,
+        chainName,
+        tasks: sorted,
+        completedCount,
+        totalCount: sorted.length,
+        nextStep,
+      });
+    }
+
+    // Sort: overdue first, then by priority
+    const sortedIndividuals = [...individualTasks].sort((a, b) => {
+      const aOverdue = isOverdue(a) ? 0 : 1;
+      const bOverdue = isOverdue(b) ? 0 : 1;
+      if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+      return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+    });
+
+    const sortedChains = [...groups].sort((a, b) => {
+      const aOverdue = isOverdue(a.nextStep) ? 0 : 1;
+      const bOverdue = isOverdue(b.nextStep) ? 0 : 1;
+      if (aOverdue !== bOverdue) return aOverdue - bOverdue;
+      return PRIORITY_ORDER[a.nextStep.priority] - PRIORITY_ORDER[b.nextStep.priority];
+    });
+
+    // Merge into a combined list of "today items" (chains count as 1 item each)
+    const combined: TodayItem[] = [];
+
+    let iIdx = 0;
+    let cIdx = 0;
+
+    while (combined.length < MAX_TODAY_ITEMS && (iIdx < sortedIndividuals.length || cIdx < sortedChains.length)) {
+      const nextIndividual = sortedIndividuals[iIdx];
+      const nextChain = sortedChains[cIdx];
+
+      if (!nextChain) {
+        combined.push({ type: 'task', task: nextIndividual });
+        iIdx++;
+      } else if (!nextIndividual) {
+        combined.push({ type: 'chain', chain: nextChain });
+        cIdx++;
+      } else {
+        // Compare priority
+        const iPri = PRIORITY_ORDER[nextIndividual.priority];
+        const cPri = PRIORITY_ORDER[nextChain.nextStep.priority];
+        const iOver = isOverdue(nextIndividual) ? 0 : 1;
+        const cOver = isOverdue(nextChain.nextStep) ? 0 : 1;
+
+        if (iOver < cOver || (iOver === cOver && iPri <= cPri)) {
+          combined.push({ type: 'task', task: nextIndividual });
+          iIdx++;
+        } else {
+          combined.push({ type: 'chain', chain: nextChain });
+          cIdx++;
+        }
+      }
+    }
+
+    const totalRemaining =
+      (sortedIndividuals.length - iIdx) + (sortedChains.length - cIdx);
+
+    return {
+      todayItems: combined,
+      chainGroups: groups,
+      overdueCount: openTasks.filter(isOverdue).length,
+      totalOpen: openTasks.length,
+      remainingCount: totalRemaining,
+    };
+  }, [openTasks]);
+
+  // Weekly digest stats
+  const weeklyStats = useMemo(() => {
+    if (!completedTasks || !openTasks) return null;
+
+    const now = new Date();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+    const completedThisWeek = completedTasks.filter(
+      (t) => t.completed_at && new Date(t.completed_at) >= weekAgo,
+    ).length;
+
+    const endOfWeek = new Date(now);
+    endOfWeek.setDate(endOfWeek.getDate() + (7 - endOfWeek.getDay()));
+    const upcomingThisWeek = openTasks.filter(
+      (t) => t.due_date && new Date(t.due_date) <= endOfWeek,
+    ).length;
+
+    return {
+      completedThisWeek,
+      upcomingThisWeek,
+      overdueCount,
+    };
+  }, [completedTasks, openTasks, overdueCount]);
+
+  const handleAddSuggestion = (suggestion: ProactiveSuggestion) => {
+    if (!activeProfileId) return;
+
+    createTaskMutation.mutate(
+      {
+        profile_id: activeProfileId,
+        title: suggestion.title,
+        description: suggestion.description,
+        priority: suggestion.priority,
+        due_date: suggestion.due_days !== undefined ? addDays(suggestion.due_days) : undefined,
+        trigger_type: 'proactive',
+        trigger_source: suggestion.trigger_source,
+        context_json: suggestion.context_json,
+      },
+      {
+        onSuccess: () => dismissSuggestion(suggestion.id),
+      },
+    );
+  };
 
   function getGreeting(): string {
     const hour = new Date().getHours();
@@ -24,6 +264,21 @@ export default function HomeScreen() {
     if (hour < 17) return 'Good afternoon';
     return 'Good evening';
   }
+
+  const todayCount = useMemo(() => {
+    if (!openTasks) return 0;
+    return openTasks.filter((t) => {
+      if (t.dependency_status === 'blocked') return false;
+      if (!t.due_date) return false;
+      const due = new Date(t.due_date);
+      const today = new Date();
+      return (
+        due.getDate() === today.getDate() &&
+        due.getMonth() === today.getMonth() &&
+        due.getFullYear() === today.getFullYear()
+      ) || isOverdue({ ...t });
+    }).length;
+  }, [openTasks]);
 
   return (
     <ScreenLayout>
@@ -55,6 +310,216 @@ export default function HomeScreen() {
               />
             ))}
           </ScrollView>
+        </View>
+      )}
+
+      {/* Weekly Digest Card — shown on Mondays when enabled */}
+      {isMonday() && weeklyDigestEnabled && weeklyStats && (
+        <View style={styles.section}>
+          <Card style={styles.digestCard}>
+            <Text style={styles.digestTitle}>Weekly Summary</Text>
+            <Text style={styles.digestBody}>
+              {weeklyStats.completedThisWeek} tasks completed, {weeklyStats.upcomingThisWeek} upcoming this week
+              {weeklyStats.overdueCount > 0
+                ? `, ${weeklyStats.overdueCount} overdue`
+                : ''}
+            </Text>
+          </Card>
+        </View>
+      )}
+
+      {/* Today Section — calm summary + max 3 items */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>Today</Text>
+          {totalOpen > 0 && (
+            <TouchableOpacity onPress={() => router.push('/(main)/(tabs)/tasks')}>
+              <Text style={styles.seeAll}>All tasks ({totalOpen})</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Calm summary line */}
+        {todayCount === 0 && overdueCount === 0 ? (
+          <View style={styles.calmBanner}>
+            <Text style={styles.calmText}>All caught up! Nothing due today.</Text>
+          </View>
+        ) : (
+          <View style={overdueCount > 0 ? styles.urgentBanner : styles.statusBanner}>
+            <Text style={overdueCount > 0 ? styles.urgentText : styles.statusText}>
+              {overdueCount > 0
+                ? `${overdueCount} overdue. `
+                : ''}
+              {todayCount > 0
+                ? `You have ${todayCount} ${todayCount === 1 ? 'item' : 'items'} for today.`
+                : overdueCount > 0
+                  ? 'Catch up on overdue items.'
+                  : ''}
+            </Text>
+          </View>
+        )}
+
+        {/* Today items — max 3 */}
+        {todayItems.map((item) => {
+          if (item.type === 'chain') {
+            const { chain } = item;
+            const overdue = isOverdue(chain.nextStep);
+            return (
+              <Card
+                key={`chain-${chain.id}`}
+                onPress={() => router.push(`/(main)/tasks/${chain.nextStep.id}`)}
+                style={styles.taskCard}
+              >
+                <View style={styles.taskRow}>
+                  <TouchableOpacity
+                    style={styles.taskCheck}
+                    onPress={() =>
+                      updateStatus.mutate({ taskId: chain.nextStep.id, status: 'completed' })
+                    }
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <View style={styles.taskCheckCircle} />
+                  </TouchableOpacity>
+                  <View style={styles.taskContent}>
+                    <Text style={styles.chainName} numberOfLines={1}>
+                      {chain.chainName}
+                    </Text>
+                    <Text style={styles.taskTitle} numberOfLines={1}>
+                      Step {chain.completedCount + 1} of {chain.totalCount}: {chain.nextStep.title}
+                    </Text>
+                    <View style={styles.taskMetaRow}>
+                      {/* Progress bar */}
+                      <View style={styles.progressBar}>
+                        <View
+                          style={[
+                            styles.progressFill,
+                            { width: `${(chain.completedCount / chain.totalCount) * 100}%` },
+                          ]}
+                        />
+                      </View>
+                      {chain.nextStep.due_date && (
+                        <Text
+                          style={[styles.taskDue, overdue && styles.taskDueOverdue]}
+                        >
+                          {formatDueDate(chain.nextStep.due_date)}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              </Card>
+            );
+          }
+
+          // Individual task
+          const { task } = item;
+          const overdue = isOverdue(task);
+          return (
+            <Card
+              key={task.id}
+              onPress={() => router.push(`/(main)/tasks/${task.id}`)}
+              style={overdue ? { ...styles.taskCard, ...styles.taskCardOverdue } : styles.taskCard}
+            >
+              <View style={styles.taskRow}>
+                <TouchableOpacity
+                  style={styles.taskCheck}
+                  onPress={() =>
+                    updateStatus.mutate({ taskId: task.id, status: 'completed' })
+                  }
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <View
+                    style={[
+                      styles.taskCheckCircle,
+                      overdue && styles.taskCheckCircleOverdue,
+                    ]}
+                  />
+                </TouchableOpacity>
+                <View style={styles.taskContent}>
+                  <Text style={styles.taskTitle} numberOfLines={1}>
+                    {task.title}
+                  </Text>
+                  <View style={styles.taskMetaRow}>
+                    {task.due_date && (
+                      <Text
+                        style={[styles.taskDue, overdue && styles.taskDueOverdue]}
+                      >
+                        {formatDueDate(task.due_date)}
+                      </Text>
+                    )}
+                    {task.trigger_source && (
+                      <Text style={styles.taskSource} numberOfLines={1}>
+                        {task.trigger_source}
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              </View>
+            </Card>
+          );
+        })}
+
+        {/* "and X more" link */}
+        {remainingCount > 0 && (
+          <TouchableOpacity
+            style={styles.moreLink}
+            onPress={() => router.push('/(main)/(tabs)/tasks')}
+          >
+            <Text style={styles.moreLinkText}>
+              and {remainingCount} more {remainingCount === 1 ? 'item' : 'items'}
+            </Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Suggested Actions — proactive suggestions */}
+      {suggestions.length > 0 && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionLabel}>Suggested Actions</Text>
+          </View>
+          {suggestions.slice(0, 3).map((suggestion) => (
+            <Card key={suggestion.id} style={styles.suggestionCard}>
+              <View style={styles.suggestionContent}>
+                <View style={styles.suggestionHeader}>
+                  <View
+                    style={[
+                      styles.suggestionPriority,
+                      { backgroundColor: (PRIORITY_COLORS[suggestion.priority] || COLORS.secondary.DEFAULT) + '1A' },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.suggestionPriorityText,
+                        { color: PRIORITY_COLORS[suggestion.priority] || COLORS.secondary.DEFAULT },
+                      ]}
+                    >
+                      {suggestion.priority}
+                    </Text>
+                  </View>
+                  <Text style={styles.suggestionTrigger}>{suggestion.trigger_source}</Text>
+                </View>
+                <Text style={styles.suggestionTitle}>{suggestion.title}</Text>
+                <Text style={styles.suggestionDesc} numberOfLines={2}>
+                  {suggestion.description}
+                </Text>
+                <View style={styles.suggestionActions}>
+                  <TouchableOpacity
+                    style={styles.suggestionAddButton}
+                    onPress={() => handleAddSuggestion(suggestion)}
+                  >
+                    <Text style={styles.suggestionAddText}>Add to Tasks</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.suggestionDismissButton}
+                    onPress={() => dismissSuggestion(suggestion.id)}
+                  >
+                    <Text style={styles.suggestionDismissText}>Dismiss</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Card>
+          ))}
         </View>
       )}
 
@@ -108,25 +573,11 @@ export default function HomeScreen() {
                   Tap to view full health profile
                 </Text>
               </View>
-              <Text style={styles.chevron}>›</Text>
+              <Text style={styles.chevron}>{'\u203A'}</Text>
             </View>
           </Card>
         </View>
       )}
-
-      {/* Recent Activity */}
-      <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Recent Activity</Text>
-        <Card>
-          <View style={styles.emptyActivity}>
-            <Text style={styles.emptyIcon}>📋</Text>
-            <Text style={styles.emptyTitle}>No recent activity</Text>
-            <Text style={styles.emptyDesc}>
-              Add a document, record a voice note, or update your profile to get started.
-            </Text>
-          </View>
-        </Card>
-      </View>
     </ScreenLayout>
   );
 }
@@ -156,6 +607,12 @@ const styles = StyleSheet.create({
   section: {
     marginBottom: 24,
   },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   sectionLabel: {
     fontSize: FONT_SIZES.sm,
     fontWeight: FONT_WEIGHTS.semibold,
@@ -164,6 +621,212 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 12,
   },
+  seeAll: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+    marginBottom: 12,
+  },
+  // Calm / status banners
+  calmBanner: {
+    backgroundColor: COLORS.success.light,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  calmText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.success.DEFAULT,
+  },
+  statusBanner: {
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  statusText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.primary.DEFAULT,
+  },
+  urgentBanner: {
+    backgroundColor: COLORS.error.light,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  urgentText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.error.DEFAULT,
+  },
+  // Digest card
+  digestCard: {
+    backgroundColor: COLORS.primary.DEFAULT + '0A',
+    borderColor: COLORS.primary.DEFAULT + '20',
+    borderWidth: 1,
+  },
+  digestTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+    marginBottom: 4,
+  },
+  digestBody: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    lineHeight: 20,
+  },
+  // Task cards
+  taskCard: {
+    marginBottom: 6,
+    padding: 12,
+  },
+  taskCardOverdue: {
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.error.DEFAULT,
+  },
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  taskCheck: {
+    marginRight: 12,
+  },
+  taskCheckCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: COLORS.border.dark,
+  },
+  taskCheckCircleOverdue: {
+    borderColor: COLORS.error.DEFAULT,
+  },
+  taskContent: {
+    flex: 1,
+  },
+  chainName: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.accent.dark,
+    marginBottom: 2,
+  },
+  taskTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.DEFAULT,
+  },
+  taskMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
+  taskDue: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+  },
+  taskDueOverdue: {
+    color: COLORS.error.DEFAULT,
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
+  taskSource: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    fontStyle: 'italic',
+    flex: 1,
+  },
+  // Progress bar for chains
+  progressBar: {
+    height: 4,
+    width: 60,
+    borderRadius: 2,
+    backgroundColor: COLORS.border.DEFAULT,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: COLORS.success.DEFAULT,
+  },
+  // More link
+  moreLink: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  moreLinkText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.primary.DEFAULT,
+  },
+  // Suggestion cards
+  suggestionCard: {
+    marginBottom: 8,
+  },
+  suggestionContent: {},
+  suggestionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  suggestionPriority: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  suggestionPriorityText: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    textTransform: 'capitalize',
+  },
+  suggestionTrigger: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    fontStyle: 'italic',
+  },
+  suggestionTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+    marginBottom: 4,
+  },
+  suggestionDesc: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    lineHeight: 20,
+    marginBottom: 10,
+  },
+  suggestionActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  suggestionAddButton: {
+    backgroundColor: COLORS.primary.DEFAULT + '15',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  suggestionAddText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+  },
+  suggestionDismissButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  suggestionDismissText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.tertiary,
+  },
+  // Profile & quick actions
   profileScroll: {
     marginHorizontal: -4,
   },
@@ -232,25 +895,5 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES['2xl'],
     color: COLORS.text.tertiary,
     fontWeight: FONT_WEIGHTS.medium,
-  },
-  emptyActivity: {
-    alignItems: 'center',
-    paddingVertical: 16,
-  },
-  emptyIcon: {
-    fontSize: 32,
-    marginBottom: 8,
-  },
-  emptyTitle: {
-    fontSize: FONT_SIZES.base,
-    fontWeight: FONT_WEIGHTS.semibold,
-    color: COLORS.text.DEFAULT,
-    marginBottom: 4,
-  },
-  emptyDesc: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.text.secondary,
-    textAlign: 'center',
-    lineHeight: 20,
   },
 });

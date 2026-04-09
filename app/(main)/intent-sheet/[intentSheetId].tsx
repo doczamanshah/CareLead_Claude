@@ -12,10 +12,14 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useIntentSheet } from '@/hooks/useIntentSheet';
 import { useCommitIntentSheet } from '@/hooks/useCommitIntentSheet';
+import type { CommitSummary } from '@/hooks/useCommitIntentSheet';
 import { getFieldLabel } from '@/lib/utils/fieldLabels';
+import { inferMedicationDefaults, FREQUENCY_OPTIONS } from '@/lib/utils/medicalInference';
+import { supabase } from '@/lib/supabase';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { IntentItem, IntentItemStatus } from '@/lib/types/intent-sheet';
+import type { CommittedItemInfo } from '@/services/commit';
 
 // ── Local state per item ───────────────────────────────────────────────────
 
@@ -30,13 +34,11 @@ function getDisplayValue(item: IntentItem): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   if (value && typeof value === 'object') {
-    // Try common value fields
     const v = value as Record<string, unknown>;
     if (typeof v.value === 'string') return v.value;
     if (typeof v.name === 'string') return v.name;
     if (typeof v.title === 'string') return v.title;
     if (typeof v.description === 'string') return v.description;
-    // Flatten simple objects into readable text
     const entries = Object.entries(v).filter(([, val]) => val != null && val !== '');
     if (entries.length === 1) return String(entries[0][1]);
     return entries.map(([k, val]) => `${k}: ${val}`).join(', ');
@@ -91,7 +93,6 @@ function IntentItemCard({
 
   return (
     <View style={[styles.card, { borderLeftColor: borderColor, borderLeftWidth: isReviewed ? 4 : 1 }]}>
-      {/* Header row */}
       <View style={styles.cardHeader}>
         <ConfidenceDot confidence={item.confidence} />
         <Text style={styles.fieldLabel}>{getFieldLabel(item.field_key)}</Text>
@@ -100,7 +101,6 @@ function IntentItemCard({
         {state.status === 'rejected' && <Text style={styles.statusIconRed}>✕</Text>}
       </View>
 
-      {/* Value */}
       {state.isEditing ? (
         <View style={styles.editContainer}>
           <TextInput
@@ -130,7 +130,6 @@ function IntentItemCard({
         </Text>
       )}
 
-      {/* Action buttons — only show when not editing */}
       {!state.isEditing && (
         <View style={styles.actions}>
           <TouchableOpacity
@@ -143,7 +142,7 @@ function IntentItemCard({
             style={[styles.actionBtn, styles.editActionBtn, state.status === 'edited' && styles.editBtnActive]}
             onPress={onEdit}
           >
-            <Text style={[styles.actionIcon, styles.editIcon, state.status === 'edited' && styles.actionIconActive]}>✎</Text>
+            <Text style={[styles.actionIcon, styles.editIconColor, state.status === 'edited' && styles.actionIconActive]}>✎</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.actionBtn, styles.rejectBtn, state.status === 'rejected' && styles.rejectBtnActive]}
@@ -157,6 +156,215 @@ function IntentItemCard({
   );
 }
 
+// ── Smart Follow-Up Card ──────────────────────────────────────────────────
+
+interface FollowUpField {
+  label: string;
+  placeholder: string;
+  key: string;
+  factId: string;
+  defaultValue: string;
+  options?: string[];
+}
+
+function getFollowUpFields(committedItems: CommittedItemInfo[]): FollowUpField[] {
+  const fields: FollowUpField[] = [];
+
+  for (const item of committedItems) {
+    const val = item.value;
+
+    if (item.category === 'medication') {
+      const drugName = (val.drug_name as string) || (val.name as string) || 'medication';
+      const defaults = inferMedicationDefaults(drugName);
+
+      if (!val.dose) {
+        fields.push({
+          label: `Dose for ${drugName}`,
+          placeholder: defaults.commonDoses[0] || 'e.g., 10mg',
+          key: 'dose',
+          factId: item.factId,
+          defaultValue: defaults.commonDoses[0] || '',
+        });
+      }
+      if (!val.frequency) {
+        fields.push({
+          label: `How often do you take ${drugName}?`,
+          placeholder: 'Select frequency',
+          key: 'frequency',
+          factId: item.factId,
+          defaultValue: defaults.commonFrequencies[0] || '',
+          options: FREQUENCY_OPTIONS.map((f) => f.value),
+        });
+      }
+      if (!val.pharmacy_name) {
+        fields.push({
+          label: `Which pharmacy for ${drugName}?`,
+          placeholder: 'e.g., CVS, Walgreens',
+          key: 'pharmacy_name',
+          factId: item.factId,
+          defaultValue: '',
+        });
+      }
+    }
+
+    if (item.category === 'condition') {
+      const condName = (val.name as string) || 'this condition';
+      if (!val.managing_provider) {
+        fields.push({
+          label: `Who manages ${condName}?`,
+          placeholder: 'Doctor name',
+          key: 'managing_provider',
+          factId: item.factId,
+          defaultValue: '',
+        });
+      }
+    }
+  }
+
+  return fields.slice(0, 3); // Max 3 fields
+}
+
+function SmartFollowUpCard({
+  committedItems,
+  onDone,
+}: {
+  committedItems: CommittedItemInfo[];
+  onDone: () => void;
+}) {
+  const followUpFields = useMemo(() => getFollowUpFields(committedItems), [committedItems]);
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    for (const f of followUpFields) {
+      init[`${f.factId}_${f.key}`] = f.defaultValue;
+    }
+    return init;
+  });
+  const [saving, setSaving] = useState(false);
+  const [savedFields, setSavedFields] = useState<Set<string>>(new Set());
+
+  if (followUpFields.length === 0) return null;
+
+  const handleSaveField = async (field: FollowUpField) => {
+    const fieldId = `${field.factId}_${field.key}`;
+    const value = fieldValues[fieldId]?.trim();
+    if (!value) return;
+
+    setSaving(true);
+    try {
+      // Fetch the current fact
+      const { data: fact } = await supabase
+        .from('profile_facts')
+        .select('value_json')
+        .eq('id', field.factId)
+        .single();
+
+      if (fact) {
+        const currentValue = fact.value_json as Record<string, unknown>;
+        const updatedValue = { ...currentValue, [field.key]: value };
+
+        await supabase
+          .from('profile_facts')
+          .update({ value_json: updatedValue, updated_at: new Date().toISOString() })
+          .eq('id', field.factId);
+
+        setSavedFields((prev) => new Set(prev).add(fieldId));
+      }
+    } catch {
+      Alert.alert('Error', 'Could not save. You can add this later from your profile.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const allSaved = followUpFields.every(
+    (f) => savedFields.has(`${f.factId}_${f.key}`),
+  );
+
+  return (
+    <View style={styles.followUpCard}>
+      <Text style={styles.followUpTitle}>Quick Details</Text>
+      <Text style={styles.followUpSubtitle}>
+        These optional details help CareLead work better for you
+      </Text>
+
+      {followUpFields.map((field) => {
+        const fieldId = `${field.factId}_${field.key}`;
+        const isSaved = savedFields.has(fieldId);
+
+        if (isSaved) {
+          return (
+            <View key={fieldId} style={styles.followUpFieldSaved}>
+              <Text style={styles.followUpFieldLabel}>{field.label}</Text>
+              <Text style={styles.followUpSavedText}>Saved</Text>
+            </View>
+          );
+        }
+
+        return (
+          <View key={fieldId} style={styles.followUpField}>
+            <Text style={styles.followUpFieldLabel}>{field.label}</Text>
+            {field.options ? (
+              <View style={styles.optionsRow}>
+                {field.options.map((opt) => (
+                  <TouchableOpacity
+                    key={opt}
+                    style={[
+                      styles.optionChip,
+                      fieldValues[fieldId] === opt && styles.optionChipActive,
+                    ]}
+                    onPress={() =>
+                      setFieldValues((prev) => ({ ...prev, [fieldId]: opt }))
+                    }
+                  >
+                    <Text
+                      style={[
+                        styles.optionChipText,
+                        fieldValues[fieldId] === opt && styles.optionChipTextActive,
+                      ]}
+                    >
+                      {opt}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <TextInput
+                style={styles.followUpInput}
+                placeholder={field.placeholder}
+                placeholderTextColor={COLORS.text.tertiary}
+                value={fieldValues[fieldId]}
+                onChangeText={(v) =>
+                  setFieldValues((prev) => ({ ...prev, [fieldId]: v }))
+                }
+              />
+            )}
+            <View style={styles.followUpFieldActions}>
+              <TouchableOpacity
+                style={styles.followUpSaveBtn}
+                onPress={() => handleSaveField(field)}
+                disabled={saving}
+              >
+                <Text style={styles.followUpSaveBtnText}>Save</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setSavedFields((prev) => new Set(prev).add(fieldId))}
+              >
+                <Text style={styles.followUpSkipText}>Skip</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        );
+      })}
+
+      {!allSaved && (
+        <TouchableOpacity style={styles.followUpDismiss} onPress={onDone}>
+          <Text style={styles.followUpDismissText}>I'll add these later</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
 // ── Main Screen ────────────────────────────────────────────────────────────
 
 export default function IntentSheetScreen() {
@@ -165,14 +373,17 @@ export default function IntentSheetScreen() {
   const { data: sheet, isLoading, error } = useIntentSheet(intentSheetId);
   const commitMutation = useCommitIntentSheet();
 
-  // Local state: per-item review decisions
   const [itemStates, setItemStates] = useState<Record<string, ItemState>>({});
-  // After commit success
-  const [commitResult, setCommitResult] = useState<{ factsCreated: number; tasksCreated: number } | null>(null);
+  const [commitResult, setCommitResult] = useState<CommitSummary | null>(null);
+  const [followUpDismissed, setFollowUpDismissed] = useState(false);
 
-  const items = sheet?.items ?? [];
+  // Filter out task-type items — Intent Sheet only shows data items
+  const allItems = sheet?.items ?? [];
+  const items = useMemo(
+    () => allItems.filter((item) => item.item_type !== 'task' && item.item_type !== 'reminder'),
+    [allItems],
+  );
 
-  // Initialize item states when data loads
   const getItemState = useCallback(
     (itemId: string): ItemState =>
       itemStates[itemId] ?? { status: 'pending', editedValue: null, isEditing: false },
@@ -189,7 +400,6 @@ export default function IntentSheetScreen() {
     [getItemState],
   );
 
-  // Review progress
   const reviewedCount = useMemo(
     () => items.filter((item) => getItemState(item.id).status !== 'pending').length,
     [items, getItemState],
@@ -199,7 +409,6 @@ export default function IntentSheetScreen() {
   const handleAccept = useCallback(
     (itemId: string) => {
       const current = getItemState(itemId);
-      // Toggle: if already accepted, go back to pending
       if (current.status === 'accepted') {
         updateItemState(itemId, { status: 'pending' });
       } else {
@@ -273,8 +482,8 @@ export default function IntentSheetScreen() {
   const handleCommit = useCallback(async () => {
     if (!intentSheetId) return;
 
-    // First, persist the review decisions to the database
-    const { supabase } = await import('@/lib/supabase');
+    // Persist the review decisions to the database
+    const { supabase: sb } = await import('@/lib/supabase');
 
     for (const item of items) {
       const state = getItemState(item.id);
@@ -284,12 +493,11 @@ export default function IntentSheetScreen() {
       if (state.status === 'edited' && state.editedValue) {
         updateData.edited_value = { value: state.editedValue };
       }
-      await supabase.from('intent_items').update(updateData).eq('id', item.id);
+      await sb.from('intent_items').update(updateData).eq('id', item.id);
     }
 
-    // Then commit
     try {
-      const result = await commitMutation.mutateAsync(intentSheetId);
+      const result = await commitMutation.mutateAsync({ intentSheetId });
       setCommitResult(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save';
@@ -302,22 +510,33 @@ export default function IntentSheetScreen() {
   if (commitResult) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.successContainer}>
-          <Text style={styles.successIcon}>✓</Text>
-          <Text style={styles.successTitle}>Saved Successfully</Text>
-          <Text style={styles.successDetail}>
-            {commitResult.factsCreated} {commitResult.factsCreated === 1 ? 'item' : 'items'} added to profile
-            {commitResult.tasksCreated > 0
-              ? `, ${commitResult.tasksCreated} ${commitResult.tasksCreated === 1 ? 'task' : 'tasks'} created`
-              : ''}
-          </Text>
+        <ScrollView contentContainerStyle={styles.successScroll}>
+          <View style={styles.successContainer}>
+            <Text style={styles.successIcon}>✓</Text>
+            <Text style={styles.successTitle}>Saved Successfully</Text>
+            <Text style={styles.successDetail}>
+              {commitResult.factsCreated} {commitResult.factsCreated === 1 ? 'item' : 'items'} added to profile
+              {commitResult.tasksCreated > 0
+                ? `\n${commitResult.tasksCreated} ${commitResult.tasksCreated === 1 ? 'task' : 'tasks'} created automatically`
+                : ''}
+            </Text>
+          </View>
+
+          {/* Smart Follow-Up Card */}
+          {!followUpDismissed && commitResult.committedItems.length > 0 && (
+            <SmartFollowUpCard
+              committedItems={commitResult.committedItems}
+              onDone={() => setFollowUpDismissed(true)}
+            />
+          )}
+
           <TouchableOpacity
             style={styles.doneButton}
             onPress={() => router.replace('/(main)/(tabs)')}
           >
             <Text style={styles.doneButtonText}>Done</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -327,6 +546,14 @@ export default function IntentSheetScreen() {
   if (isLoading) {
     return (
       <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Text style={styles.backArrow}>‹</Text>
+          </TouchableOpacity>
+          <View style={styles.headerInfo}>
+            <Text style={styles.headerTitle}>Review Extracted Data</Text>
+          </View>
+        </View>
         <View style={styles.center}>
           <Text style={styles.loadingText}>Loading review...</Text>
         </View>
@@ -366,7 +593,6 @@ export default function IntentSheetScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <Text style={styles.backArrow}>‹</Text>
@@ -379,14 +605,12 @@ export default function IntentSheetScreen() {
         </View>
       </View>
 
-      {/* Accept All */}
       {reviewedCount < items.length && (
         <TouchableOpacity style={styles.acceptAllBtn} onPress={handleAcceptAll}>
           <Text style={styles.acceptAllText}>Accept All</Text>
         </TouchableOpacity>
       )}
 
-      {/* Items */}
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
@@ -407,7 +631,6 @@ export default function IntentSheetScreen() {
         ))}
       </ScrollView>
 
-      {/* Sticky bottom bar */}
       <SafeAreaView edges={['bottom']} style={styles.bottomBar}>
         <Text style={styles.progressText}>
           {reviewedCount} of {items.length} reviewed
@@ -600,7 +823,7 @@ const styles = StyleSheet.create({
   editBtnActive: {
     backgroundColor: COLORS.warning.DEFAULT,
   },
-  editIcon: {
+  editIconColor: {
     color: COLORS.warning.DEFAULT,
   },
   rejectBtn: {
@@ -688,11 +911,15 @@ const styles = StyleSheet.create({
   },
 
   // Success screen
-  successContainer: {
-    flex: 1,
+  successScroll: {
+    flexGrow: 1,
+    padding: 32,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
+  },
+  successContainer: {
+    alignItems: 'center',
+    marginBottom: 24,
   },
   successIcon: {
     fontSize: 56,
@@ -710,17 +937,124 @@ const styles = StyleSheet.create({
     color: COLORS.text.secondary,
     textAlign: 'center',
     lineHeight: FONT_SIZES.base * 1.5,
-    marginBottom: 32,
   },
   doneButton: {
     backgroundColor: COLORS.primary.DEFAULT,
     paddingHorizontal: 48,
     paddingVertical: 14,
     borderRadius: 12,
+    marginTop: 24,
   },
   doneButtonText: {
     color: COLORS.text.inverse,
     fontSize: FONT_SIZES.lg,
     fontWeight: FONT_WEIGHTS.semibold,
+  },
+
+  // Smart Follow-Up Card
+  followUpCard: {
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border.light,
+    width: '100%',
+  },
+  followUpTitle: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.text.DEFAULT,
+    marginBottom: 4,
+  },
+  followUpSubtitle: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    marginBottom: 16,
+  },
+  followUpField: {
+    marginBottom: 16,
+  },
+  followUpFieldSaved: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingVertical: 8,
+    opacity: 0.6,
+  },
+  followUpFieldLabel: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+    marginBottom: 6,
+  },
+  followUpSavedText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.success.DEFAULT,
+    fontWeight: FONT_WEIGHTS.medium,
+  },
+  followUpInput: {
+    borderWidth: 1,
+    borderColor: COLORS.border.dark,
+    borderRadius: 8,
+    padding: 10,
+    fontSize: FONT_SIZES.base,
+    color: COLORS.text.DEFAULT,
+    backgroundColor: COLORS.surface.muted,
+  },
+  optionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  optionChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border.dark,
+    backgroundColor: COLORS.surface.muted,
+  },
+  optionChipActive: {
+    borderColor: COLORS.primary.DEFAULT,
+    backgroundColor: COLORS.primary.DEFAULT,
+  },
+  optionChipText: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+  },
+  optionChipTextActive: {
+    color: COLORS.text.inverse,
+  },
+  followUpFieldActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    marginTop: 8,
+  },
+  followUpSaveBtn: {
+    backgroundColor: COLORS.primary.DEFAULT,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  followUpSaveBtnText: {
+    color: COLORS.text.inverse,
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
+  followUpSkipText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.tertiary,
+  },
+  followUpDismiss: {
+    alignItems: 'center',
+    paddingTop: 8,
+  },
+  followUpDismissText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.tertiary,
+    fontWeight: FONT_WEIGHTS.medium,
   },
 });

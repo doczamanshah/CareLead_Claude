@@ -102,16 +102,21 @@ carelead/
 │   │   │   ├── _layout.tsx
 │   │   │   └── [profileId]/
 │   │   │       ├── _layout.tsx
-│   │   │       ├── index.tsx         # Profile overview (facts grouped by category)
+│   │   │       ├── index.tsx         # Profile overview (facts grouped by category + strengthen card)
 │   │   │       ├── edit.tsx          # Edit profile sections
-│   │   │       └── add-fact.tsx      # Add new profile fact
+│   │   │       ├── add-fact.tsx      # Add new profile fact
+│   │   │       └── strengthen.tsx    # Strengthen Your Profile (fill gaps)
 │   │   ├── capture/                  # Data capture screens
 │   │   │   ├── _layout.tsx
 │   │   │   ├── camera.tsx            # Photo/scan capture (saves as JPEG)
 │   │   │   ├── voice.tsx             # Text dictation screen (type or use iOS keyboard dictation)
 │   │   │   └── upload.tsx            # Document upload (PDF/image picker)
-│   │   └── intent-sheet/             # Intent Sheet review screens
-│   │       └── [intentSheetId].tsx   # Review and confirm extracted data
+│   │   ├── intent-sheet/             # Intent Sheet review screens
+│   │   │   └── [intentSheetId].tsx   # Review and confirm extracted data
+│   │   └── tasks/                    # Task management screens
+│   │       ├── _layout.tsx
+│   │       ├── [taskId].tsx          # Task detail/edit screen
+│   │       └── create.tsx            # Create new task form
 │
 ├── components/                       # REUSABLE UI COMPONENTS
 │   ├── ui/                           # Generic, module-agnostic components
@@ -132,14 +137,23 @@ carelead/
 │   ├── useProfileDetail.ts           # Fetch profile with facts
 │   ├── useIntentSheet.ts             # Intent sheet fetch and trigger extraction
 │   ├── useArtifacts.ts               # Upload and create note artifacts
-│   └── useCommitIntentSheet.ts       # Commit accepted intent items
+│   ├── useCommitIntentSheet.ts       # Commit accepted intent items (tasks auto-generated silently)
+│   ├── useTasks.ts                   # Task CRUD, chains, assignment with TanStack Query
+│   ├── useProactiveChecks.ts         # Proactive task suggestions with daily cooldown
+│   ├── usePreferences.ts            # User preferences (care guidance level, weekly digest)
+│   └── useProfileGaps.ts            # Profile gap analysis and filling
 │
 ├── services/                         # API/DATABASE CALLS (organized by module)
 │   ├── auth.ts                       # Authentication service
 │   ├── profiles.ts                   # Profile CRUD operations
 │   ├── artifacts.ts                  # Document/artifact upload and creation
 │   ├── extraction.ts                 # AI extraction pipeline calls
-│   └── commit.ts                     # Commit engine — writes accepted items to profile
+│   ├── commit.ts                     # Commit engine — SINGLE source of task generation, context gates, dedup
+│   ├── tasks.ts                      # Task CRUD operations with assignment support
+│   ├── taskChains.ts                 # Task chain creation, progression, and recurrence
+│   ├── proactiveChecks.ts            # Proactive task suggestions (refills, appointments, overdue, stale)
+│   ├── preferences.ts               # User preferences CRUD (care guidance, weekly digest)
+│   └── profileGaps.ts               # Profile Intelligence — gap analysis and filling
 │
 ├── stores/                           # ZUSTAND STORES (client-side state only)
 │   ├── authStore.ts                  # Session, user object
@@ -151,14 +165,18 @@ carelead/
 │   ├── types/                        # TypeScript type definitions
 │   │   ├── profile.ts                # Profile, Household, ProfileFact, ProfileFactCategory
 │   │   ├── artifacts.ts              # Artifact, ArtifactWithUrl, upload params
-│   │   └── intent-sheet.ts           # IntentSheet, IntentItem, status enums
+│   │   ├── intent-sheet.ts           # IntentSheet, IntentItem, status enums
+│   │   └── tasks.ts                  # Task, CreateTaskParams, TaskFilter, TaskChainTemplate, ProactiveSuggestion
 │   ├── utils/
 │   │   ├── formatProfileFact.ts      # Category-aware profile fact display formatting
-│   │   └── fieldLabels.ts            # Human-readable labels for field keys
+│   │   ├── fieldLabels.ts            # Human-readable labels for field keys
+│   │   ├── notifications.ts         # Push notification scheduling utilities
+│   │   └── medicalInference.ts      # Smart defaults for medications and conditions (data entry assistance)
 │   └── constants/
 │       ├── colors.ts                 # COLORS object — design system colors
 │       ├── typography.ts             # FONT_SIZES, FONT_WEIGHTS
-│       └── config.ts                 # App configuration values
+│       ├── config.ts                 # App configuration values
+│       └── taskTemplates.ts          # Pre-built task chain templates (NEW_MEDICATION_CHAIN, etc.)
 │
 ├── assets/                           # Static assets
 │   ├── images/
@@ -173,7 +191,9 @@ carelead/
     │   ├── 00001_foundation.sql      # Users, households, profiles, profile_facts, artifacts, extracted_fields, intent_sheets, intent_items
     │   ├── 00002_signup_function.sql  # RPC function for user signup (SECURITY DEFINER)
     │   ├── 00003_fix_rls_policies.sql     # RLS policy fixes (v1)
-    │   └── 00003_fix_rls_policies_v2.sql  # RLS policy fixes (v2)
+    │   ├── 00003_fix_rls_policies_v2.sql  # RLS policy fixes (v2)
+    │   ├── 00004_task_enhancements.sql    # Task system enhancements (context, chains, dependencies, assignment, recurrence, triggers)
+│   └── 00005_user_preferences.sql    # User preferences table (care guidance level, weekly digest)
     └── functions/                    # Edge Functions (server-side code)
         ├── _shared/
         │   └── cors.ts               # Shared CORS headers
@@ -209,11 +229,13 @@ CAPTURE → ARTIFACT → PROCESS → INTENT SHEET → COMMIT → ACTION
    - File artifacts (photo/upload): file uploaded to `artifacts` storage bucket, metadata in `artifacts` table
    - Note artifacts (text dictation): no file upload, text stored directly in `artifacts.ocr_text`
 3. **PROCESS**: The `extract-document` Edge Function runs AI extraction via Claude API → produces structured entries with confidence scores and evidence
-4. **INTENT SHEET**: Extracted entries are stored as `intent_items` in an `intent_sheet` (status: `pending_review`), presented to user for review
+4. **INTENT SHEET**: Extracted entries are stored as `intent_items` in an `intent_sheet` (status: `pending_review`), presented to user for review. **Only data items** — no task suggestions in the Intent Sheet.
 5. **COMMIT**: User reviews each item (accept / edit+accept / reject). Accepted items are committed atomically via `services/commit.ts`:
    - Profile facts are created/updated in the `profile_facts` table
+   - Tasks are auto-generated silently based on care guidance level, with context gates and deduplication
+   - A Smart Follow-Up card appears asking for optional enrichment data
    - Audit events are logged
-6. **ACTION**: Committed items appear in the Profile overview, grouped by category
+6. **ACTION**: Committed items appear in the Profile overview, grouped by category. Profile gaps feed into the "Strengthen Your Profile" system.
 
 ### Rules for this flow:
 - **Nothing becomes verified data without user confirmation.** No exceptions.
@@ -255,7 +277,7 @@ Profile facts store their values as structured JSON. The `lib/utils/formatProfil
 
 ---
 
-## Five Shared Primitives
+## Six Shared Primitives
 
 These are built ONCE and reused by every module:
 
@@ -281,20 +303,38 @@ These are built ONCE and reused by every module:
 ### 3. Commit Engine
 - Implemented in `services/commit.ts` with hook `hooks/useCommitIntentSheet.ts`
 - Takes accepted intent items and writes them to `profile_facts` table
+- **SINGLE source of AI-suggested task generation** — no task items in Intent Sheet
+- Fetches user's care guidance level and filters tasks by tier (essentials/balanced/comprehensive)
+- **Context gates**: tasks are only generated when sufficient data exists (e.g., "fill prescription" requires pharmacy on file)
+- **Deduplication**: checks for existing similar tasks before creating
+- When context is insufficient, creates profile gap entries instead of low-quality tasks
+- Returns committed items info for the Smart Follow-Up card
 - All writes happen in a single database transaction
-- Logs audit events for every committed change
-- Returns a commit receipt with summary of what was written
+- Logs audit events for every committed change and every skipped task generation
 
 ### 4. Task System
-- Tasks are the operational output of CareLead
-- Fields: `title`, `description`, `due_date`, `priority`, `status`, `profile_id`, `source_type`, `source_ref`
+- Tasks are the operational output of CareLead — a smart care operations engine
+- Core fields: `title`, `description`, `due_date`, `priority`, `status`, `profile_id`, `source_type`, `source_ref`
+- Enhanced fields: `context_json` (call scripts, contact info, instructions, reference numbers), `parent_task_id`, `chain_order`, `depends_on_task_id`, `dependency_status`, `assigned_to_user_id`, `recurrence_rule`, `trigger_type`, `trigger_source`
 - Statuses: `pending` → `in_progress` → `completed` | `dismissed`
-- Tasks can be auto-generated (from Intent Sheet commit) or manually created
+- Trigger types: `manual` | `extraction` | `proactive` | `time_based` | `chain`
+- Tasks can be auto-generated (from Intent Sheet commit with AI-suggested tasks), created from task chain templates, proactively suggested, or manually created
+- **Smart Task Generation**: AI extraction suggests contextual follow-up tasks based on committed data category (medication, allergy, insurance, condition)
+- **Task Chains**: Sequences of linked tasks where each depends on the previous one completing (e.g., NEW_MEDICATION_CHAIN, POST_VISIT_CHAIN)
+- **Proactive Checks**: Runs on app open (daily cooldown) to suggest refill reminders, appointment prep, overdue escalation, and stale profile reviews
+- **Caregiver Assignment**: Tasks can be assigned to household members
 - Reminders are scheduled via push notifications
-- Every task links back to its source (which document/appointment/medication created it)
-- **Status: Not yet implemented — planned for Phase 2**
+- Every task links back to its source and includes rich context (call scripts, instructions, contact info)
 
-### 5. Audit Trail
+### 5. Profile Intelligence (Gaps)
+- Implemented in `services/profileGaps.ts` with hook `hooks/useProfileGaps.ts`
+- Analyzes profile facts to identify missing data that would unlock better functionality
+- Gap categories: medication (dose, frequency, pharmacy, prescriber), condition (managing provider, status), allergy (reaction, severity), insurance (PCP), general (emergency contact, care team, pharmacy)
+- Gaps are prioritized by impact: HIGH = unlocks task generation, MEDIUM = improves context, LOW = nice to have
+- "Strengthen Your Profile" card on profile overview links to fill-gaps screen
+- Filling a gap triggers task query invalidation — newly unlocked tasks appear automatically
+
+### 6. Audit Trail
 - Append-only `audit_events` table
 - Every significant action creates an audit event:
   - `event_type` (e.g., `profile_fact.created`, `intent_item.accepted`, `task.completed`)
@@ -584,7 +624,7 @@ When building a new module, follow this exact sequence:
 - [x] Smart Extraction pipeline (AI-powered)
 - [x] Intent Sheet (review and confirm)
 - [x] Commit Engine
-- [ ] Tasks & Reminders with push notifications
+- [x] Tasks & Reminders with push notifications, smart generation, chains, proactive checks, caregiver assignment
 - [ ] Appointments (CRUD, pre-visit prep, post-visit closeout)
 - [ ] Medications (list, detail, schedules, reconciliation)
 - [ ] Caregivers (invite, permissions, consent, revocation)
@@ -618,15 +658,12 @@ When building a new module, follow this exact sequence:
 - [x] **Step 3**: Data capture — photo capture, document upload, text dictation screen
 - [x] **Step 4**: AI extraction — Edge Function with Claude API, extraction service and hooks
 - [x] **Step 5**: Intent Sheet review, commit engine, smart extraction, profile fact display with formatProfileFact
-- [ ] **Step 6**: Tasks & reminders integration (auto-generate tasks from committed items)
+- [x] **Step 6**: Tasks & reminders — full task management, push notifications, home screen action items
 - [ ] **Step 7**: Appointment module screens
 - [ ] **Step 8**: Medication module screens
 - [ ] **Step 9**: Caregiver management
 
-### Phase 2: Tasks & Reminders + Appointments
-- Task system (create, list, complete, dismiss)
-- Push notification setup
-- Reminder scheduling
+### Phase 2: Appointments
 - Appointment CRUD
 - Pre-visit plan generation
 - Post-visit closeout

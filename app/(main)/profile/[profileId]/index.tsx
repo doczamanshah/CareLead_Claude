@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
 import { useProfileDetail } from '@/hooks/useProfileDetail';
+import { useProfileGaps } from '@/hooks/useProfileGaps';
 import { PROFILE_FACT_CATEGORIES } from '@/lib/types/profile';
 import type { ProfileFact, ProfileFactCategory } from '@/lib/types/profile';
 import { COLORS } from '@/lib/constants/colors';
@@ -21,6 +22,7 @@ function groupFactsByCategory(facts: ProfileFact[]): Record<string, ProfileFact[
 export default function ProfileOverviewScreen() {
   const { profileId } = useLocalSearchParams<{ profileId: string }>();
   const { data: profile, isLoading, error } = useProfileDetail(profileId ?? null);
+  const { data: gaps } = useProfileGaps(profileId);
   const router = useRouter();
 
   if (isLoading) return <ScreenLayout loading />;
@@ -28,9 +30,30 @@ export default function ProfileOverviewScreen() {
   if (!profile) return <ScreenLayout error={new Error('Profile not found')} />;
 
   const grouped = groupFactsByCategory(profile.facts);
+  const gapCount = gaps?.length ?? 0;
 
   return (
     <ScreenLayout>
+      {/* Strengthen Your Profile Card */}
+      {gapCount > 0 && (
+        <TouchableOpacity
+          style={styles.strengthenCard}
+          onPress={() =>
+            router.push(`/(main)/profile/${profileId}/strengthen`)
+          }
+        >
+          <View style={styles.strengthenContent}>
+            <Text style={styles.strengthenTitle}>
+              Strengthen Your Profile
+            </Text>
+            <Text style={styles.strengthenSubtitle}>
+              {gapCount} {gapCount === 1 ? 'item' : 'items'} could help CareLead work better for you
+            </Text>
+          </View>
+          <Text style={styles.strengthenArrow}>›</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Profile Header */}
       <View style={styles.profileHeader}>
         <View style={styles.avatar}>
@@ -159,6 +182,35 @@ function CategorySection({
 }
 
 const styles = StyleSheet.create({
+  strengthenCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.accent.light,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: COLORS.accent.DEFAULT,
+  },
+  strengthenContent: {
+    flex: 1,
+  },
+  strengthenTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.text.DEFAULT,
+    marginBottom: 2,
+  },
+  strengthenSubtitle: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+  },
+  strengthenArrow: {
+    fontSize: 24,
+    color: COLORS.text.secondary,
+    fontWeight: FONT_WEIGHTS.bold,
+    marginLeft: 8,
+  },
   profileHeader: {
     flexDirection: 'row',
     alignItems: 'center',

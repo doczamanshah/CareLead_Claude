@@ -1,12 +1,17 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Slot, useRouter, useSegments } from 'expo-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { useProfileStore } from '@/stores/profileStore';
 import { fetchUserProfiles } from '@/services/profiles';
 import { bootstrapNewUser, userHasHousehold } from '@/services/auth';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
+import {
+  requestNotificationPermissions,
+  addNotificationResponseListener,
+} from '@/lib/utils/notifications';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -22,6 +27,20 @@ function AuthGate() {
   const { isLoaded: profilesLoaded, setProfiles } = useProfileStore();
   const segments = useSegments();
   const router = useRouter();
+  const notificationListenerRef = useRef<ReturnType<typeof addNotificationResponseListener> | null>(null);
+
+  // Request notification permissions and set up listener
+  useEffect(() => {
+    requestNotificationPermissions();
+
+    notificationListenerRef.current = addNotificationResponseListener((taskId) => {
+      router.push(`/(main)/tasks/${taskId}`);
+    });
+
+    return () => {
+      notificationListenerRef.current?.remove();
+    };
+  }, [router]);
 
   // Listen for auth state changes
   useEffect(() => {
@@ -76,8 +95,10 @@ function AuthGate() {
 
 export default function RootLayout() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthGate />
-    </QueryClientProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <AuthGate />
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }

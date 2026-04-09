@@ -93,7 +93,9 @@ RESPONSE FORMAT:
       "evidence": "<brief note about where/how this was found>"
     }
   ]
-}`;
+}
+
+IMPORTANT: Do NOT include suggested_tasks in your response. Only return extracted data fields. Task generation is handled separately by the commit engine.`;
 
 // ── Field-key to intent item type mapping ───────────────────────────────────
 
