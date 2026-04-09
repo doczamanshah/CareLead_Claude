@@ -27,7 +27,7 @@ CareLead is a patient-owned, AI-first care operations platform that helps patien
 
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
-| Client | Expo SDK 52+ with React Native + TypeScript | Mobile app (iOS-first, Android soon after) |
+| Client | Expo SDK 54 with React Native + TypeScript | Mobile app (iOS-first, Android soon after) |
 | Navigation | Expo Router v4 (file-based routing) | Screen navigation |
 | Server State | TanStack Query (React Query) v5 | Data fetching, caching, sync |
 | Client State | Zustand | Local app state (active profile, UI state) |
@@ -35,12 +35,34 @@ CareLead is a patient-owned, AI-first care operations platform that helps patien
 | ORM/Query | Supabase JS Client v2 | Type-safe database queries |
 | AI | Anthropic Claude API (via Edge Functions) | Extraction, summarization, smart features |
 | Forms | React Hook Form + Zod | Form handling and validation |
-| Styling | NativeWind (Tailwind for React Native) | Consistent styling |
+| Styling | React Native StyleSheet.create + color constants | Consistent styling |
 
 ### Key Rules
 - **Never call AI APIs directly from the mobile app.** Always go through Supabase Edge Functions.
 - **Never store API keys, secrets, or credentials in code.** Use environment variables only.
 - **TypeScript strict mode is always on.** No `any` types. No `@ts-ignore` unless absolutely necessary with a comment explaining why.
+- **All styling uses `StyleSheet.create()` with color constants from `lib/constants/colors.ts`.** No NativeWind, no Tailwind className syntax. Note: `nativewind`, `tailwindcss`, `tailwind.config.js`, `global.css`, and `nativewind-env.d.ts` still exist in the project as dead config — they are unused and can be removed in a cleanup pass.
+
+---
+
+## Supabase Setup Requirements
+
+### Storage Bucket
+A **private** storage bucket named `artifacts` must be created manually in the Supabase Dashboard (Storage > New Bucket > name: `artifacts`, private: true). This bucket stores all uploaded documents, photos, and files.
+
+### Edge Function Secrets
+The following secrets must be set for Edge Functions:
+```bash
+supabase secrets set ANTHROPIC_API_KEY=sk-ant-... --project-ref ccpxoidlqsolzypmkiul
+```
+
+Secret names are **case-sensitive** — `ANTHROPIC_API_KEY` must match exactly what the Edge Function reads via `Deno.env.get('ANTHROPIC_API_KEY')`.
+
+### Edge Function Deployment
+Deploy Edge Functions with JWT verification disabled (required for the current architecture):
+```bash
+supabase functions deploy extract-document --no-verify-jwt --project-ref ccpxoidlqsolzypmkiul
+```
 
 ---
 
@@ -51,20 +73,24 @@ carelead/
 ├── CLAUDE.md                         # THIS FILE — read first, always
 ├── app.json                          # Expo configuration
 ├── package.json
+├── package-lock.json
 ├── tsconfig.json
+├── metro.config.js                   # Metro bundler configuration
 ├── .env.local                        # Local environment variables (NEVER commit)
 ├── .gitignore
+├── tailwind.config.js                # UNUSED — legacy from abandoned NativeWind setup
+├── global.css                        # UNUSED — legacy from abandoned NativeWind setup
+├── nativewind-env.d.ts               # UNUSED — legacy from abandoned NativeWind setup
 │
 ├── app/                              # ALL SCREENS (Expo Router file-based routing)
 │   ├── _layout.tsx                   # Root layout (providers, auth gate)
 │   ├── index.tsx                     # Entry redirect
-│   ├── (auth)/                       # Auth screens (sign-in, sign-up, forgot-password)
+│   ├── (auth)/                       # Auth screens
 │   │   ├── _layout.tsx
 │   │   ├── sign-in.tsx
-│   │   ├── sign-up.tsx
-│   │   └── forgot-password.tsx
+│   │   └── sign-up.tsx
 │   ├── (main)/                       # Authenticated app shell
-│   │   ├── _layout.tsx               # Tab navigator layout
+│   │   ├── _layout.tsx               # Main layout wrapper
 │   │   ├── (tabs)/                   # Bottom tab screens
 │   │   │   ├── _layout.tsx           # Tab bar configuration
 │   │   │   ├── index.tsx             # Home / Today
@@ -73,82 +99,47 @@ carelead/
 │   │   │   ├── household.tsx         # Household & Profiles
 │   │   │   └── settings.tsx          # Settings
 │   │   ├── profile/                  # Profile module screens
-│   │   │   ├── [profileId]/
-│   │   │   │   ├── index.tsx         # Profile snapshot/overview
-│   │   │   │   ├── edit.tsx          # Edit profile sections
-│   │   │   │   ├── medications.tsx   # Medications list for this profile
-│   │   │   │   ├── conditions.tsx    # Conditions list
-│   │   │   │   ├── allergies.tsx     # Allergies list
-│   │   │   │   ├── insurance.tsx     # Insurance details
-│   │   │   │   ├── care-team.tsx     # Care team & pharmacy
-│   │   │   │   └── history.tsx       # Surgical/family history
-│   │   ├── appointments/             # Appointment module screens
-│   │   │   ├── index.tsx             # Appointments list
-│   │   │   ├── [appointmentId]/
-│   │   │   │   ├── index.tsx         # Appointment detail
-│   │   │   │   ├── prep.tsx          # Pre-visit preparation
-│   │   │   │   └── closeout.tsx      # Post-visit closeout
-│   │   │   └── create.tsx            # New appointment
-│   │   ├── medications/              # Medications module screens
-│   │   │   ├── index.tsx             # Full medications management
-│   │   │   ├── [medicationId].tsx    # Medication detail
-│   │   │   └── reconcile.tsx         # Medication reconciliation
+│   │   │   ├── _layout.tsx
+│   │   │   └── [profileId]/
+│   │   │       ├── _layout.tsx
+│   │   │       ├── index.tsx         # Profile overview (facts grouped by category)
+│   │   │       ├── edit.tsx          # Edit profile sections
+│   │   │       └── add-fact.tsx      # Add new profile fact
 │   │   ├── capture/                  # Data capture screens
-│   │   │   ├── camera.tsx            # Photo/scan capture
-│   │   │   ├── voice.tsx             # Voice recording
-│   │   │   └── upload.tsx            # Document upload
-│   │   ├── intent-sheet/             # Intent Sheet review screens
-│   │   │   └── [intentSheetId].tsx   # Review and confirm extracted data
-│   │   └── caregivers/              # Caregiver management
-│   │       ├── index.tsx             # Manage caregivers
-│   │       └── invite.tsx            # Invite a caregiver
+│   │   │   ├── _layout.tsx
+│   │   │   ├── camera.tsx            # Photo/scan capture (saves as JPEG)
+│   │   │   ├── voice.tsx             # Text dictation screen (type or use iOS keyboard dictation)
+│   │   │   └── upload.tsx            # Document upload (PDF/image picker)
+│   │   └── intent-sheet/             # Intent Sheet review screens
+│   │       └── [intentSheetId].tsx   # Review and confirm extracted data
 │
 ├── components/                       # REUSABLE UI COMPONENTS
 │   ├── ui/                           # Generic, module-agnostic components
 │   │   ├── Button.tsx
 │   │   ├── Card.tsx
 │   │   ├── Input.tsx
-│   │   ├── Badge.tsx
-│   │   ├── Modal.tsx
-│   │   ├── LoadingSpinner.tsx
 │   │   ├── EmptyState.tsx
-│   │   ├── ConfidenceIndicator.tsx   # Shows AI confidence level
-│   │   ├── ProvenanceBadge.tsx       # Shows data source/verification state
+│   │   ├── LoadingSpinner.tsx
 │   │   └── ScreenLayout.tsx          # Consistent screen wrapper
 │   └── modules/                      # Module-specific compound components
-│       ├── IntentSheet.tsx           # The review-and-confirm component
-│       ├── IntentItem.tsx            # Single item in an Intent Sheet
 │       ├── ProfileCard.tsx           # Profile summary card
-│       ├── ProfileSnapshot.tsx       # Full profile snapshot view
-│       ├── TaskCard.tsx              # Task display card
-│       ├── MedicationCard.tsx        # Medication display card
-│       ├── AppointmentCard.tsx       # Appointment display card
-│       ├── DocumentCard.tsx          # Document/artifact display card
-│       ├── AuditTimeline.tsx         # Timeline of changes/actions
-│       └── CaptureButton.tsx         # Global floating action for capture
+│       └── DocumentCard.tsx          # Document/artifact display card
 │
 ├── hooks/                            # CUSTOM REACT HOOKS
 │   ├── useActiveProfile.ts           # Get/set the currently active profile
 │   ├── useAuth.ts                    # Authentication state and actions
-│   ├── useProfile.ts                 # Fetch profile data
-│   ├── useTasks.ts                   # Fetch and manage tasks
-│   ├── useAppointments.ts            # Fetch and manage appointments
-│   ├── useMedications.ts             # Fetch and manage medications
-│   ├── useIntentSheet.ts             # Intent sheet operations
-│   ├── useArtifacts.ts               # Document/artifact operations
-│   └── useAudit.ts                   # Audit trail queries
+│   ├── useProfiles.ts                # List profiles in household
+│   ├── useProfileDetail.ts           # Fetch profile with facts
+│   ├── useIntentSheet.ts             # Intent sheet fetch and trigger extraction
+│   ├── useArtifacts.ts               # Upload and create note artifacts
+│   └── useCommitIntentSheet.ts       # Commit accepted intent items
 │
 ├── services/                         # API/DATABASE CALLS (organized by module)
 │   ├── auth.ts                       # Authentication service
 │   ├── profiles.ts                   # Profile CRUD operations
-│   ├── artifacts.ts                  # Document/artifact operations
+│   ├── artifacts.ts                  # Document/artifact upload and creation
 │   ├── extraction.ts                 # AI extraction pipeline calls
-│   ├── intent-sheets.ts              # Intent sheet CRUD and commit
-│   ├── tasks.ts                      # Tasks and reminders
-│   ├── appointments.ts               # Appointments CRUD
-│   ├── medications.ts                # Medications CRUD
-│   ├── caregivers.ts                 # Caregiver/permission management
-│   └── audit.ts                      # Audit trail logging
+│   └── commit.ts                     # Commit engine — writes accepted items to profile
 │
 ├── stores/                           # ZUSTAND STORES (client-side state only)
 │   ├── authStore.ts                  # Session, user object
@@ -158,44 +149,36 @@ carelead/
 ├── lib/                              # CORE UTILITIES AND CONFIGURATION
 │   ├── supabase.ts                   # Supabase client initialization
 │   ├── types/                        # TypeScript type definitions
-│   │   ├── database.ts               # Auto-generated Supabase types
-│   │   ├── profile.ts                # Profile-related types
-│   │   ├── artifacts.ts              # Artifact/document types
-│   │   ├── intent-sheet.ts           # Intent sheet types
-│   │   ├── tasks.ts                  # Task types
-│   │   ├── appointments.ts           # Appointment types
-│   │   ├── medications.ts            # Medication types
-│   │   └── caregivers.ts             # Caregiver/permission types
+│   │   ├── profile.ts                # Profile, Household, ProfileFact, ProfileFactCategory
+│   │   ├── artifacts.ts              # Artifact, ArtifactWithUrl, upload params
+│   │   └── intent-sheet.ts           # IntentSheet, IntentItem, status enums
 │   ├── utils/
-│   │   ├── formatting.ts             # Date, currency, text formatting
-│   │   ├── validation.ts             # Zod schemas for form validation
-│   │   └── helpers.ts                # General utility functions
+│   │   ├── formatProfileFact.ts      # Category-aware profile fact display formatting
+│   │   └── fieldLabels.ts            # Human-readable labels for field keys
 │   └── constants/
-│       ├── colors.ts                 # Design system colors
-│       ├── typography.ts             # Font sizes, weights
-│       ├── taxonomy.ts               # Field taxonomy keys (conditions, meds, allergies, etc.)
+│       ├── colors.ts                 # COLORS object — design system colors
+│       ├── typography.ts             # FONT_SIZES, FONT_WEIGHTS
 │       └── config.ts                 # App configuration values
 │
 ├── assets/                           # Static assets
 │   ├── images/
-│   └── fonts/
+│   ├── fonts/
+│   ├── adaptive-icon.png
+│   ├── favicon.png
+│   ├── icon.png
+│   └── splash-icon.png
 │
 └── supabase/                         # SUPABASE BACKEND
-    ├── config.toml                   # Supabase local dev config
     ├── migrations/                   # Database schema migrations (ordered)
-    │   ├── 00001_foundation.sql      # Users, households, profiles
-    │   ├── 00002_artifacts.sql       # Documents, notes, processing jobs
-    │   ├── 00003_extraction.sql      # Extracted fields, intent sheets
-    │   ├── 00004_profile_facts.sql   # Verified profile data tables
-    │   ├── 00005_tasks.sql           # Tasks and reminders
-    │   ├── 00006_appointments.sql    # Appointments module
-    │   ├── 00007_medications.sql     # Medications module
-    │   ├── 00008_caregivers.sql      # Permissions and consent
-    │   └── 00009_audit.sql           # Audit trail
+    │   ├── 00001_foundation.sql      # Users, households, profiles, profile_facts, artifacts, extracted_fields, intent_sheets, intent_items
+    │   ├── 00002_signup_function.sql  # RPC function for user signup (SECURITY DEFINER)
+    │   ├── 00003_fix_rls_policies.sql     # RLS policy fixes (v1)
+    │   └── 00003_fix_rls_policies_v2.sql  # RLS policy fixes (v2)
     └── functions/                    # Edge Functions (server-side code)
-        ├── extract-document/         # AI document extraction
-        ├── process-voice/            # Voice transcription + extraction
-        └── generate-intent-sheet/    # Intent sheet generation
+        ├── _shared/
+        │   └── cors.ts               # Shared CORS headers
+        └── extract-document/
+            └── index.ts              # AI document extraction via Claude API
 ```
 
 ### Folder Rules
@@ -218,15 +201,19 @@ CAPTURE → ARTIFACT → PROCESS → INTENT SHEET → COMMIT → ACTION
 
 ### Step by step:
 
-1. **CAPTURE**: User provides input (photo, voice, text, document upload)
-2. **ARTIFACT**: Input is stored as a canonical artifact (Document or Note) in Supabase Storage + `artifacts` table
-3. **PROCESS**: Edge Function runs AI extraction → produces structured suggestions with confidence scores and evidence
-4. **INTENT SHEET**: Suggestions are stored as `intent_items` in an `intent_sheet`, presented to user for review
-5. **COMMIT**: User reviews each item (accept / edit+accept / reject). Accepted items are committed atomically:
-   - Profile facts are created/updated in verified tables
-   - Tasks and reminders are created
+1. **CAPTURE**: User provides input via one of three methods:
+   - **Camera** (`capture/camera.tsx`): Takes a photo, saved as JPEG (not HEIC — Claude API doesn't support HEIC)
+   - **Text dictation** (`capture/voice.tsx`): User types text or uses iOS keyboard dictation. Saved as a note artifact with `ocr_text` populated directly — no audio file is uploaded.
+   - **Document upload** (`capture/upload.tsx`): User picks a PDF or image file from their device
+2. **ARTIFACT**: Input is stored as a canonical artifact in Supabase:
+   - File artifacts (photo/upload): file uploaded to `artifacts` storage bucket, metadata in `artifacts` table
+   - Note artifacts (text dictation): no file upload, text stored directly in `artifacts.ocr_text`
+3. **PROCESS**: The `extract-document` Edge Function runs AI extraction via Claude API → produces structured entries with confidence scores and evidence
+4. **INTENT SHEET**: Extracted entries are stored as `intent_items` in an `intent_sheet` (status: `pending_review`), presented to user for review
+5. **COMMIT**: User reviews each item (accept / edit+accept / reject). Accepted items are committed atomically via `services/commit.ts`:
+   - Profile facts are created/updated in the `profile_facts` table
    - Audit events are logged
-6. **ACTION**: Committed items appear in Home, Tasks, Profile, and relevant module screens
+6. **ACTION**: Committed items appear in the Profile overview, grouped by category
 
 ### Rules for this flow:
 - **Nothing becomes verified data without user confirmation.** No exceptions.
@@ -236,30 +223,65 @@ CAPTURE → ARTIFACT → PROCESS → INTENT SHEET → COMMIT → ACTION
 
 ---
 
+## Extraction Architecture: Structured Entries
+
+The extraction pipeline produces **structured entries**, not fragmented individual fields. Each intent item represents a complete, coherent entity.
+
+### Example: Medication extraction
+One intent item contains the full medication as a structured JSON value:
+```json
+{
+  "field_key": "medication",
+  "proposed_value": {
+    "drug_name": "lisinopril",
+    "dose": "25mg",
+    "frequency": "once daily",
+    "route": "oral"
+  },
+  "confidence": 0.95,
+  "evidence_json": { "source_text": "Lisinopril 25mg PO daily" }
+}
+```
+
+This is **one** intent item — not four separate items for drug_name, dose, frequency, and route.
+
+### Other structured entry examples:
+- **Allergy**: `{ "substance": "penicillin", "reaction": "hives", "severity": "moderate" }`
+- **Condition**: `{ "condition_name": "Type 2 Diabetes", "status": "active", "diagnosed_date": "2019" }`
+- **Insurance**: `{ "plan_name": "Blue Cross PPO", "member_id": "XYZ123", "group_number": "G456" }`
+
+### Profile Facts Display
+Profile facts store their values as structured JSON. The `lib/utils/formatProfileFact.ts` utility provides category-aware formatting — it knows how to render a medication fact differently from an allergy fact or insurance fact. Each category has its own display logic that extracts the title and detail lines from the JSON value.
+
+---
+
 ## Five Shared Primitives
 
 These are built ONCE and reused by every module:
 
 ### 1. Artifact Pipeline
-- Accepts: photos, scans, PDFs, voice recordings, typed text
-- Stores: file in Supabase Storage, metadata in `artifacts` table
-- Processes: OCR → classification → extraction (via Edge Functions)
+- Accepts: photos (JPEG), document uploads (PDF/images), typed text (note artifacts)
+- Stores: files in private `artifacts` Supabase Storage bucket, metadata in `artifacts` table
+- Note artifacts have no file — text goes directly into `artifacts.ocr_text`
+- Processes: extraction via `extract-document` Edge Function
 - Status tracking: `pending` → `processing` → `completed` → `failed`
+- Key column: `file_size` (not `file_size_bytes`)
 
 ### 2. Intent Sheet
 - Generated after extraction completes
 - Contains `intent_items`, each with:
-  - `field_key` (taxonomy key like `medication.name`, `allergy.substance`)
-  - `proposed_value` (what AI found)
+  - `field_key` (category key like `medication`, `allergy`, `condition`, `insurance`)
+  - `proposed_value` (structured JSON object — a complete entry, not a single field)
   - `confidence` (0.0 to 1.0)
-  - `evidence` (reference to source location in artifact)
+  - `evidence_json` (reference to source text in artifact)
   - `status`: `pending` → `accepted` | `edited` | `rejected`
-- UI component: `<IntentSheet>` renders all items with accept/edit/reject controls
+- Sheet statuses: `draft` → `pending_review` → `partially_committed` | `committed` | `dismissed`
+- UI component: Intent Sheet review screen renders all items with accept/edit/reject controls
 
 ### 3. Commit Engine
-- Takes accepted intent items and writes them to verified tables
+- Implemented in `services/commit.ts` with hook `hooks/useCommitIntentSheet.ts`
+- Takes accepted intent items and writes them to `profile_facts` table
 - All writes happen in a single database transaction
-- Creates corresponding tasks/reminders if the intent item implies action
 - Logs audit events for every committed change
 - Returns a commit receipt with summary of what was written
 
@@ -270,6 +292,7 @@ These are built ONCE and reused by every module:
 - Tasks can be auto-generated (from Intent Sheet commit) or manually created
 - Reminders are scheduled via push notifications
 - Every task links back to its source (which document/appointment/medication created it)
+- **Status: Not yet implemented — planned for Phase 2**
 
 ### 5. Audit Trail
 - Append-only `audit_events` table
@@ -360,7 +383,7 @@ export function MedicationCard({ medication, onPress }: MedicationCardProps) {
 - Every component has a typed Props interface
 - Components are functional (no class components)
 - Components receive data via props — they don't fetch their own data
-- Components use NativeWind (Tailwind) classes for styling
+- Components use `StyleSheet.create()` for styling with colors from `lib/constants/colors.ts`
 
 ---
 
@@ -395,15 +418,15 @@ export function MedicationCard({ medication, onPress }: MedicationCardProps) {
 
 ### Files and Folders
 - **Screens**: `kebab-case.tsx` (e.g., `care-team.tsx`, `sign-in.tsx`)
-- **Components**: `PascalCase.tsx` (e.g., `MedicationCard.tsx`, `IntentSheet.tsx`)
-- **Hooks**: `camelCase.ts` starting with `use` (e.g., `useMedications.ts`)
-- **Services**: `camelCase.ts` (e.g., `medications.ts`, `profiles.ts`)
-- **Types**: `camelCase.ts` (e.g., `medications.ts` inside `lib/types/`)
-- **Utils**: `camelCase.ts` (e.g., `formatting.ts`)
+- **Components**: `PascalCase.tsx` (e.g., `MedicationCard.tsx`, `ProfileCard.tsx`)
+- **Hooks**: `camelCase.ts` starting with `use` (e.g., `useProfiles.ts`)
+- **Services**: `camelCase.ts` (e.g., `commit.ts`, `profiles.ts`)
+- **Types**: `camelCase.ts` (e.g., `profile.ts` inside `lib/types/`)
+- **Utils**: `camelCase.ts` (e.g., `formatProfileFact.ts`)
 
 ### Code
 - **Functions**: `camelCase` (e.g., `fetchMedications`, `commitIntentSheet`)
-- **Components**: `PascalCase` (e.g., `MedicationCard`, `IntentSheet`)
+- **Components**: `PascalCase` (e.g., `MedicationCard`, `ProfileCard`)
 - **Types/Interfaces**: `PascalCase` (e.g., `Medication`, `IntentItem`, `ProfileFact`)
 - **Constants**: `SCREAMING_SNAKE_CASE` (e.g., `MAX_CONFIDENCE_THRESHOLD`)
 - **Database columns**: `snake_case` (e.g., `profile_id`, `created_at`)
@@ -444,6 +467,7 @@ export function MedicationCard({ medication, onPress }: MedicationCardProps) {
 ### Edge Functions
 - All AI processing happens in Edge Functions (server-side)
 - API keys for AI providers are stored as Supabase secrets
+- JWT verification is disabled on Edge Functions (`--no-verify-jwt` during deployment)
 - Edge Functions minimize data sent to AI providers — only send what's needed
 - AI provider responses are not logged in full — only non-PHI metadata (model, latency, token count, status)
 
@@ -464,6 +488,34 @@ type ServiceResult<T> =
 - Errors are shown to users in plain, non-technical language
 - Network errors prompt retry options
 - Never show raw error messages or stack traces to users
+
+---
+
+## Known Patterns and Gotchas
+
+Patterns that emerged during development — read these before building new features:
+
+### RLS Chicken-and-Egg Problem
+When a new user signs up, they need to create a household and profile — but RLS policies require the user to already be a household member to insert rows. This was solved with a `SECURITY DEFINER` RPC function (`00002_signup_function.sql`) that runs with elevated privileges to bootstrap the user's household, membership, and first profile in a single transaction.
+
+### Edge Function Secrets
+Secret names are **case-sensitive** and must match exactly what the code reads via `Deno.env.get()`. A mismatch silently returns `undefined`. Always verify with `supabase secrets list`.
+
+### expo-file-system Legacy Import
+In Expo SDK 54, `expo-file-system` requires importing from the legacy path:
+```typescript
+import * as FileSystem from 'expo-file-system/legacy';
+```
+Not `from 'expo-file-system'` — the default export has breaking changes in SDK 54.
+
+### HEIC Files Not Supported
+iPhone cameras default to HEIC format, which the Claude API does not accept. The camera capture screen is configured to save photos as **JPEG** to avoid this issue. Any future file upload flow must also reject or convert HEIC files.
+
+### Artifacts Table Column Name
+The column for file size in the `artifacts` table is `file_size` (not `file_size_bytes`). This has caused bugs when the wrong name was assumed.
+
+### Profile Facts Use Structured JSON
+Profile facts store their `value` as structured JSON (not flat strings). The `formatProfileFact.ts` utility handles category-aware display formatting. When adding new profile fact categories, add a corresponding formatter in that file.
 
 ---
 
@@ -528,16 +580,16 @@ When building a new module, follow this exact sequence:
 - [x] Authentication (sign up, sign in, session)
 - [x] Household & Profile foundation
 - [x] Profile management (all sections: meds, allergies, conditions, insurance, care team, history)
-- [x] Data Entry: text input, voice capture, photo/scan capture, document upload
+- [x] Data Entry: text input, text dictation, photo/scan capture, document upload
 - [x] Smart Extraction pipeline (AI-powered)
 - [x] Intent Sheet (review and confirm)
 - [x] Commit Engine
-- [x] Tasks & Reminders with push notifications
-- [x] Appointments (CRUD, pre-visit prep, post-visit closeout)
-- [x] Medications (list, detail, schedules, reconciliation)
-- [x] Caregivers (invite, permissions, consent, revocation)
-- [x] Profile Snapshot & Export
-- [x] Audit Trail (append-only logging)
+- [ ] Tasks & Reminders with push notifications
+- [ ] Appointments (CRUD, pre-visit prep, post-visit closeout)
+- [ ] Medications (list, detail, schedules, reconciliation)
+- [ ] Caregivers (invite, permissions, consent, revocation)
+- [ ] Profile Snapshot & Export
+- [ ] Audit Trail (append-only logging)
 
 ### NOT in V1 (future modules)
 - [ ] Bills & EOBs
@@ -553,22 +605,23 @@ When building a new module, follow this exact sequence:
 
 ## Build Phases
 
-### Phase 0: Foundation
-- Expo project scaffold with folder structure
-- Supabase connection and auth flow
-- Design system (colors, typography, shared components)
-- Navigation skeleton (tabs, auth gate)
-- Database: foundation migration (users, households, profiles)
+### Phase 0: Foundation — COMPLETE
+- [x] Expo project scaffold with folder structure
+- [x] Supabase connection and auth flow
+- [x] Design system (colors, typography, shared components)
+- [x] Navigation skeleton (tabs, auth gate)
+- [x] Database: foundation migration (users, households, profiles)
 
-### Phase 1: Profile + Data Entry + Intent Sheet
-- Profile CRUD screens (all sections)
-- Photo capture, voice recording, document upload
-- Artifact storage pipeline
-- AI extraction Edge Function
-- Intent Sheet component and review flow
-- Commit engine
-- Profile Snapshot view
-- Audit trail logging
+### Phase 1: Profile + Data Entry + Intent Sheet — IN PROGRESS
+- [x] **Step 1**: Database schema — foundation tables, RLS policies, signup RPC function
+- [x] **Step 2**: Profile system — household, profile facts, family members, profile overview screen
+- [x] **Step 3**: Data capture — photo capture, document upload, text dictation screen
+- [x] **Step 4**: AI extraction — Edge Function with Claude API, extraction service and hooks
+- [x] **Step 5**: Intent Sheet review, commit engine, smart extraction, profile fact display with formatProfileFact
+- [ ] **Step 6**: Tasks & reminders integration (auto-generate tasks from committed items)
+- [ ] **Step 7**: Appointment module screens
+- [ ] **Step 8**: Medication module screens
+- [ ] **Step 9**: Caregiver management
 
 ### Phase 2: Tasks & Reminders + Appointments
 - Task system (create, list, complete, dismiss)
