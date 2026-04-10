@@ -6,18 +6,40 @@ import { Card } from '@/components/ui/Card';
 import { ProfileCard } from '@/components/modules/ProfileCard';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useTasks, useUpdateTaskStatus, useCreateTask } from '@/hooks/useTasks';
+import { useAppointments } from '@/hooks/useAppointments';
 import { useProactiveChecks } from '@/hooks/useProactiveChecks';
 import { useWeeklyDigest } from '@/hooks/usePreferences';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { Task, ProactiveSuggestion } from '@/lib/types/tasks';
 import { PRIORITY_ORDER } from '@/lib/types/tasks';
+import {
+  APPOINTMENT_TYPE_ICONS,
+  APPOINTMENT_TYPE_LABELS,
+  getPrepStatus,
+} from '@/lib/types/appointments';
+import type { VisitPrepStatus } from '@/lib/types/appointments';
+
+const PREP_STATUS_LABELS: Record<VisitPrepStatus, string> = {
+  not_started: 'Prep: Not started',
+  draft: 'Prep: Draft',
+  ready: 'Prep: Ready \u2713',
+};
+
+const PREP_STATUS_COLORS: Record<VisitPrepStatus, string> = {
+  not_started: COLORS.text.tertiary,
+  draft: COLORS.accent.dark,
+  ready: COLORS.success.DEFAULT,
+};
+
+const NUDGE_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
 
 const QUICK_ACTIONS = [
   { key: 'camera', icon: '\uD83D\uDCF7', label: 'Take\nPhoto', route: '/(main)/capture/camera' },
   { key: 'document', icon: '\uD83D\uDCC4', label: 'Add\nDocument', route: '/(main)/capture/upload' },
-  { key: 'voice', icon: '\uD83C\uDF99\uFE0F', label: 'Record\nVoice Note', route: '/(main)/capture/voice' },
+  { key: 'voice', icon: '\uD83C\uDFA4', label: 'Voice\nNote', route: '/(main)/capture/voice' },
   { key: 'task', icon: '\u2705', label: 'New\nTask', route: '/(main)/tasks/create' },
+  { key: 'appointment', icon: '\uD83D\uDCC5', label: 'New\nAppointment', route: '/(main)/appointments/create' },
 ] as const;
 
 const MAX_TODAY_ITEMS = 3;
@@ -93,6 +115,53 @@ export default function HomeScreen() {
 
   const updateStatus = useUpdateTaskStatus();
   const createTaskMutation = useCreateTask();
+
+  const nowIso = new Date().toISOString();
+
+  // Show ALL non-cancelled appointments on the home screen so users always
+  // see what's on file. We sort/split into upcoming vs. closeout below.
+  const {
+    data: allAppointments,
+    isLoading: appointmentsLoading,
+    error: appointmentsError,
+  } = useAppointments(activeProfileId);
+
+  // eslint-disable-next-line no-console
+  console.log('[HomeScreen] appointments debug', {
+    activeProfileId,
+    enabled: !!activeProfileId,
+    isLoading: appointmentsLoading,
+    error: appointmentsError?.message,
+    count: allAppointments?.length,
+    appointments: allAppointments?.map((a) => ({
+      id: a.id,
+      title: a.title,
+      status: a.status,
+      start_time: a.start_time,
+    })),
+  });
+
+  const upcomingAppointments = (allAppointments ?? [])
+    .filter(
+      (a) =>
+        (a.status === 'scheduled' ||
+          a.status === 'preparing' ||
+          a.status === 'ready') &&
+        a.start_time >= nowIso,
+    )
+    .sort((a, b) => a.start_time.localeCompare(b.start_time));
+
+  // Past appointments that still need a closeout decision (the visit time
+  // has passed but status hasn't moved to completed/cancelled yet).
+  const needsCloseoutAppointments = (allAppointments ?? [])
+    .filter(
+      (a) =>
+        (a.status === 'scheduled' ||
+          a.status === 'preparing' ||
+          a.status === 'ready') &&
+        a.start_time < nowIso,
+    )
+    .sort((a, b) => a.start_time.localeCompare(b.start_time));
 
   const { suggestions, dismissSuggestion } = useProactiveChecks(activeProfileId);
   const { enabled: weeklyDigestEnabled } = useWeeklyDigest();
@@ -471,6 +540,167 @@ export default function HomeScreen() {
           </TouchableOpacity>
         )}
       </View>
+
+      {/* Upcoming Appointments — always rendered (loading / empty / list) */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>Upcoming Appointments</Text>
+          <TouchableOpacity onPress={() => router.push('/(main)/appointments')}>
+            <Text style={styles.seeAll}>See all</Text>
+          </TouchableOpacity>
+        </View>
+        {appointmentsError ? (
+          <Card>
+            <Text style={styles.emptyApptText}>
+              Couldn’t load appointments: {appointmentsError.message}
+            </Text>
+          </Card>
+        ) : appointmentsLoading && !allAppointments ? (
+          <Card>
+            <Text style={styles.emptyApptText}>Loading appointments…</Text>
+          </Card>
+        ) : upcomingAppointments.length === 0 ? (
+          <Card>
+            <Text style={styles.emptyApptText}>No upcoming appointments</Text>
+            <TouchableOpacity
+              style={styles.emptyApptButton}
+              onPress={() => router.push('/(main)/appointments/create')}
+            >
+              <Text style={styles.emptyApptButtonText}>Schedule one</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : (
+          upcomingAppointments.slice(0, 2).map((apt) => {
+            const aptDate = new Date(apt.start_time);
+            const now = new Date();
+            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            const target = new Date(aptDate.getFullYear(), aptDate.getMonth(), aptDate.getDate());
+            const diffDays = Math.round(
+              (target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
+            );
+            const time = aptDate.toLocaleTimeString('en-US', {
+              hour: 'numeric',
+              minute: '2-digit',
+            });
+            const dateLabel =
+              diffDays === 0
+                ? `Today, ${time}`
+                : diffDays === 1
+                  ? `Tomorrow, ${time}`
+                  : diffDays > 0 && diffDays <= 7
+                    ? `${aptDate.toLocaleDateString('en-US', { weekday: 'long' })}, ${time}`
+                    : `${aptDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`;
+            const aptPrepStatus = getPrepStatus(apt.prep_json);
+            const aptPrepColor = PREP_STATUS_COLORS[aptPrepStatus];
+            const visiblePrepQuestions = apt.prep_json
+              ? apt.prep_json.questions.filter((q) => !q.dismissed).length
+              : 0;
+            const msUntilVisit = aptDate.getTime() - Date.now();
+            const showNudge = msUntilVisit > 0 && msUntilVisit <= NUDGE_WINDOW_MS;
+
+            const providerLabel =
+              apt.provider_name ?? `your ${APPOINTMENT_TYPE_LABELS[apt.appointment_type].toLowerCase()}`;
+            const daysUntil = Math.max(1, Math.ceil(msUntilVisit / (1000 * 60 * 60 * 24)));
+            const daysLabel =
+              daysUntil === 1 ? 'tomorrow' : `in ${daysUntil} days`;
+
+            let nudgeText: string | null = null;
+            let nudgeButtonLabel: string | null = null;
+            if (showNudge && aptPrepStatus === 'not_started') {
+              nudgeText = `Your visit with ${providerLabel} is ${daysLabel} — ready to prepare?`;
+              nudgeButtonLabel = 'Start Prep';
+            } else if (showNudge && aptPrepStatus === 'draft') {
+              nudgeText = `Visit prep in progress — ${visiblePrepQuestions} question${visiblePrepQuestions === 1 ? '' : 's'} added`;
+              nudgeButtonLabel = 'Continue';
+            } else if (showNudge && aptPrepStatus === 'ready') {
+              nudgeText = 'Visit prep ready \u2713';
+              nudgeButtonLabel = 'Review';
+            }
+
+            return (
+              <View key={apt.id}>
+                <Card
+                  onPress={() => router.push(`/(main)/appointments/${apt.id}`)}
+                  style={styles.appointmentRow}
+                >
+                  <View style={styles.appointmentRowInner}>
+                    <Text style={styles.appointmentRowIcon}>
+                      {APPOINTMENT_TYPE_ICONS[apt.appointment_type]}
+                    </Text>
+                    <View style={styles.appointmentRowContent}>
+                      <Text style={styles.appointmentRowTitle} numberOfLines={1}>
+                        {apt.title}
+                      </Text>
+                      <Text style={styles.appointmentRowMeta} numberOfLines={1}>
+                        {dateLabel}
+                        {apt.provider_name ? ` \u2022 ${apt.provider_name}` : ''}
+                      </Text>
+                      <Text style={[styles.prepStatusInline, { color: aptPrepColor }]}>
+                        {PREP_STATUS_LABELS[aptPrepStatus]}
+                      </Text>
+                    </View>
+                    <Text style={styles.chevron}>{'\u203A'}</Text>
+                  </View>
+                </Card>
+                {nudgeText && (
+                  <Card style={styles.nudgeCard}>
+                    <Text style={styles.nudgeText}>{nudgeText}</Text>
+                    <TouchableOpacity
+                      style={styles.nudgeButton}
+                      onPress={() =>
+                        router.push(`/(main)/appointments/${apt.id}/plan`)
+                      }
+                    >
+                      <Text style={styles.nudgeButtonText}>
+                        {nudgeButtonLabel}
+                      </Text>
+                    </TouchableOpacity>
+                  </Card>
+                )}
+              </View>
+            );
+          })
+        )}
+      </View>
+
+      {/* Post-visit prompt — appears for any appointment whose start time has
+          passed but which hasn't been closed out yet. */}
+      {needsCloseoutAppointments.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>How did it go?</Text>
+          {needsCloseoutAppointments.slice(0, 3).map((apt) => (
+            <Card key={`closeout-${apt.id}`} style={styles.closeoutCard}>
+              <Text style={styles.closeoutTitle}>
+                How did your visit with {apt.provider_name ?? apt.title} go?
+              </Text>
+              <Text style={styles.closeoutMeta}>
+                {new Date(apt.start_time).toLocaleDateString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                })}
+                {' \u2022 '}
+                {APPOINTMENT_TYPE_LABELS[apt.appointment_type]}
+              </Text>
+              <View style={styles.closeoutActions}>
+                <TouchableOpacity
+                  style={styles.closeoutPrimary}
+                  onPress={() => router.push(`/(main)/appointments/${apt.id}`)}
+                >
+                  <Text style={styles.closeoutPrimaryText}>Start Closeout</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.closeoutSecondary}
+                  onPress={() => router.push(`/(main)/appointments/${apt.id}`)}
+                >
+                  <Text style={styles.closeoutSecondaryText}>
+                    Didn’t happen / Reschedule
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </Card>
+          ))}
+        </View>
+      )}
 
       {/* Suggested Actions — proactive suggestions */}
       {suggestions.length > 0 && (
@@ -895,5 +1125,118 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES['2xl'],
     color: COLORS.text.tertiary,
     fontWeight: FONT_WEIGHTS.medium,
+  },
+  // Upcoming appointments
+  emptyApptText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    marginBottom: 8,
+  },
+  emptyApptButton: {
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+  },
+  emptyApptButtonText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+  },
+  appointmentRow: {
+    marginBottom: 8,
+  },
+  appointmentRowInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  appointmentRowIcon: {
+    fontSize: 26,
+    marginRight: 12,
+  },
+  appointmentRowContent: {
+    flex: 1,
+  },
+  appointmentRowTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  appointmentRowMeta: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    marginTop: 2,
+  },
+  prepStatusInline: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    marginTop: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  nudgeCard: {
+    marginTop: 6,
+    marginBottom: 12,
+    backgroundColor: COLORS.primary.DEFAULT + '0F',
+    borderColor: COLORS.primary.DEFAULT + '33',
+    borderWidth: 1,
+  },
+  nudgeText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.DEFAULT,
+    lineHeight: 20,
+  },
+  nudgeButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: COLORS.primary.DEFAULT,
+    borderRadius: 8,
+  },
+  nudgeButtonText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.inverse,
+  },
+  // Post-visit closeout prompt
+  closeoutCard: {
+    marginBottom: 10,
+    backgroundColor: COLORS.accent.dark + '0F',
+    borderColor: COLORS.accent.dark + '33',
+    borderWidth: 1,
+  },
+  closeoutTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  closeoutMeta: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    marginTop: 4,
+  },
+  closeoutActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+  },
+  closeoutPrimary: {
+    backgroundColor: COLORS.primary.DEFAULT,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  closeoutPrimaryText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.inverse,
+  },
+  closeoutSecondary: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  closeoutSecondaryText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.secondary,
   },
 });

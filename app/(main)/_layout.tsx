@@ -14,6 +14,7 @@ export default function MainLayout() {
       <Stack.Screen name="capture" options={{ animation: 'slide_from_right' }} />
       <Stack.Screen name="intent-sheet" options={{ animation: 'slide_from_right' }} />
       <Stack.Screen name="tasks" options={{ animation: 'slide_from_right' }} />
+      <Stack.Screen name="appointments" options={{ animation: 'slide_from_right' }} />
     </Stack>
   );
 }
