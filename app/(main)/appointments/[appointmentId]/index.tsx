@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -16,6 +17,10 @@ import {
   useAppointmentDetail,
   useGenerateVisitPacket,
 } from '@/hooks/useAppointments';
+import {
+  useCloseoutForAppointment,
+  useGenerateVisitSummary,
+} from '@/hooks/useCloseout';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import {
@@ -69,6 +74,10 @@ export default function AppointmentDetailScreen() {
     appointmentId ?? null,
   );
   const generatePacket = useGenerateVisitPacket();
+  const { data: closeout } = useCloseoutForAppointment(appointmentId ?? null);
+  const generateSummary = useGenerateVisitSummary();
+  const [summaryText, setSummaryText] = useState<string | null>(null);
+  const [summaryExpanded, setSummaryExpanded] = useState(false);
 
   if (isLoading) {
     return (
@@ -268,17 +277,98 @@ export default function AppointmentDetailScreen() {
           </Card>
         )}
 
-        {appointment.status !== 'cancelled' && (
+        {/* Post-completion view */}
+        {appointment.status === 'completed' && closeout && (
+          <View>
+            <Text style={styles.sectionLabel}>Visit Summary</Text>
+            <Card style={styles.prepCard}>
+              {summaryText ? (
+                <>
+                  <TouchableOpacity
+                    onPress={() => setSummaryExpanded(!summaryExpanded)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.prepCardTitle}>
+                      {summaryExpanded ? 'Visit Summary' : 'Visit Summary (tap to expand)'}
+                    </Text>
+                    {summaryExpanded && (
+                      <Text style={styles.summaryBodyText}>{summaryText}</Text>
+                    )}
+                  </TouchableOpacity>
+                  <View style={{ marginTop: 12 }}>
+                    <Button
+                      title="Share Visit Summary"
+                      variant="outline"
+                      onPress={async () => {
+                        try {
+                          await Share.share({
+                            message: summaryText ?? '',
+                            title: `Visit Summary — ${appointment.title}`,
+                          });
+                        } catch {
+                          // user cancelled
+                        }
+                      }}
+                    />
+                  </View>
+                </>
+              ) : (
+                <View>
+                  <Text style={styles.prepCardBody}>
+                    Tap below to view and share the visit summary.
+                  </Text>
+                  <View style={{ marginTop: 12 }}>
+                    <Button
+                      title="Load Visit Summary"
+                      variant="outline"
+                      loading={generateSummary.isPending}
+                      onPress={() => {
+                        if (!closeout?.id) return;
+                        generateSummary.mutate(closeout.id, {
+                          onSuccess: (text) => {
+                            setSummaryText(text);
+                            setSummaryExpanded(true);
+                          },
+                        });
+                      }}
+                    />
+                  </View>
+                </View>
+              )}
+            </Card>
+
+            {closeout.quick_summary && (
+              <>
+                <Text style={styles.sectionLabel}>What happened</Text>
+                <Card style={styles.detailsCard}>
+                  <Text style={styles.detailValue}>{closeout.quick_summary}</Text>
+                </Card>
+              </>
+            )}
+
+            {closeout.followup_timeframe && (
+              <>
+                <Text style={styles.sectionLabel}>Follow-up</Text>
+                <Card style={styles.detailsCard}>
+                  <Text style={styles.detailValue}>{closeout.followup_timeframe}</Text>
+                </Card>
+              </>
+            )}
+          </View>
+        )}
+
+        {/* Closeout action — only for non-completed, non-cancelled appointments */}
+        {appointment.status !== 'cancelled' &&
+          appointment.status !== 'completed' &&
+          appointment.status !== 'rescheduled' && (
           <View style={styles.actionSection}>
             <Button
               title="Start Closeout"
               variant="outline"
               onPress={() => {
-                // Closeout flow lands in Part B
+                router.push(`/(main)/appointments/${appointmentId}/closeout`);
               }}
-              disabled
             />
-            <Text style={styles.comingSoonText}>Available after the visit</Text>
           </View>
         )}
       </ScrollView>
@@ -458,10 +548,10 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   actionSection: { marginBottom: 24 },
-  comingSoonText: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.text.tertiary,
-    textAlign: 'center',
-    marginTop: 8,
+  summaryBodyText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.DEFAULT,
+    marginTop: 10,
+    lineHeight: 20,
   },
 });

@@ -8,6 +8,7 @@ export default function AppointmentsLayout() {
       <Stack.Screen name="[appointmentId]/index" />
       <Stack.Screen name="[appointmentId]/plan" />
       <Stack.Screen name="[appointmentId]/suggest" />
+      <Stack.Screen name="[appointmentId]/closeout" />
     </Stack>
   );
 }

@@ -74,6 +74,19 @@ emergency_contact.entry → {"name", "relationship", "phone"}
 
 lab.entry → {"test_name", "result_value", "units", "reference_range", "status", "date_collected", "date_reported", "ordering_provider", "performing_lab"}
 
+followup.entry → {"action": "schedule follow-up | complete lab work | get imaging | fill prescription | other", "description": "what needs to happen", "timeframe": "2 weeks | 1 month | 3 days | etc.", "provider": "doctor name if mentioned"}
+  Use this for ANY follow-up instruction: "follow up in 2 weeks", "return in 1 month", "schedule appointment in 3 months", "get labs done in 2 weeks", "come back in 6 weeks", etc.
+
+CRITICAL — FOLLOW-UP DETECTION:
+Pay special attention to phrases indicating follow-up actions:
+- "follow up in X weeks/months" → followup.entry with timeframe
+- "return in X" → followup.entry with timeframe
+- "schedule appointment in X" → followup.entry with timeframe
+- "come back in X" → followup.entry with timeframe
+- "get [labs/imaging/test] done" → followup.entry with action "complete lab work" or "get imaging"
+- "needs [test name]" → followup.entry
+These are NOT conditions or medications — they are actionable follow-up instructions.
+
 If multiple items exist in the same category (e.g., 3 medications), create 3 separate "medication.entry" fields — one per medication.
 
 DOCUMENT TYPES:
@@ -104,6 +117,8 @@ function getItemType(fieldKey: string): string {
   switch (category) {
     case "medication":
       return "medication";
+    case "followup":
+      return "followup";
     default:
       return "profile_fact";
   }

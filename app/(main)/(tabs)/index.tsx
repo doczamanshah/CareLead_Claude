@@ -684,13 +684,13 @@ export default function HomeScreen() {
               <View style={styles.closeoutActions}>
                 <TouchableOpacity
                   style={styles.closeoutPrimary}
-                  onPress={() => router.push(`/(main)/appointments/${apt.id}`)}
+                  onPress={() => router.push(`/(main)/appointments/${apt.id}/closeout`)}
                 >
                   <Text style={styles.closeoutPrimaryText}>Start Closeout</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.closeoutSecondary}
-                  onPress={() => router.push(`/(main)/appointments/${apt.id}`)}
+                  onPress={() => router.push(`/(main)/appointments/${apt.id}/closeout`)}
                 >
                   <Text style={styles.closeoutSecondaryText}>
                     Didn’t happen / Reschedule

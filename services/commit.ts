@@ -9,6 +9,7 @@
 import { supabase } from '@/lib/supabase';
 import { getCategoryFromFieldKey } from '@/lib/utils/fieldLabels';
 import { getCareGuidanceLevel } from '@/services/preferences';
+import { findExistingProfileFact, describeFactChanges, getIdentifyingFieldForCategory } from '@/services/profileFactUpsert';
 import type { IntentItem, IntentSheet } from '@/lib/types/intent-sheet';
 import type { ProfileFactCategory } from '@/lib/types/profile';
 import type { TaskContextJson, TaskPriority } from '@/lib/types/tasks';
@@ -306,6 +307,7 @@ function isValidCategory(cat: string): cat is ProfileFactCategory {
   return VALID_CATEGORIES.includes(cat as ProfileFactCategory);
 }
 
+
 /**
  * Check if a similar task already exists for this profile.
  * Prevents duplicate task generation.
@@ -474,33 +476,85 @@ export async function commitIntentSheet(
 
     if (!category || !isValidCategory(category)) continue;
 
-    const { data: factData, error: factError } = await supabase
-      .from('profile_facts')
-      .insert({
+    // Check if an existing fact with the same identifier already exists
+    const existingFact = await findExistingProfileFact(
+      typedSheet.profile_id,
+      category,
+      finalValue as Record<string, unknown>,
+    );
+
+    let factId: string;
+    let isUpdate = false;
+
+    if (existingFact) {
+      // UPDATE existing fact — merge new values into existing
+      const mergedValue = { ...existingFact.value_json, ...(finalValue as Record<string, unknown>) };
+      const { error: updateError } = await supabase
+        .from('profile_facts')
+        .update({
+          value_json: mergedValue,
+          source_type: 'document',
+          source_ref: typedSheet.artifact_id,
+          verification_status: 'verified',
+          verified_at: now,
+          verified_by: userId,
+          actor_id: userId,
+          updated_at: now,
+        })
+        .eq('id', existingFact.id);
+
+      if (updateError) continue;
+
+      factId = existingFact.id;
+      isUpdate = true;
+
+      const identifyingField = getIdentifyingFieldForCategory(category);
+      const identifierName =
+        identifyingField && (finalValue as Record<string, unknown>)[identifyingField]
+          ? String((finalValue as Record<string, unknown>)[identifyingField])
+          : category;
+
+      await supabase.from('audit_events').insert({
         profile_id: typedSheet.profile_id,
-        category,
-        field_key: item.field_key ?? `${category}.unknown`,
-        value_json: finalValue,
-        source_type: 'document',
-        source_ref: typedSheet.artifact_id,
-        verification_status: 'verified',
-        verified_at: now,
-        verified_by: userId,
         actor_id: userId,
-      })
-      .select('id')
-      .single();
-
-    if (!factError && factData) {
-      factsCreated++;
-      committedItems.push({
-        category,
-        fieldKey: item.field_key ?? `${category}.entry`,
-        value: finalValue as Record<string, unknown>,
-        factId: factData.id,
+        event_type: 'profile_fact.updated',
+        metadata: {
+          profile_fact_id: existingFact.id,
+          intent_item_id: item.id,
+          intent_sheet_id: intentSheetId,
+          category,
+          field_key: item.field_key,
+          source: 'intent_sheet_commit',
+          change_description: describeFactChanges(
+            identifierName,
+            existingFact.value_json,
+            finalValue as Record<string, unknown>,
+          ),
+        },
       });
+    } else {
+      // INSERT new fact
+      const { data: factData, error: factError } = await supabase
+        .from('profile_facts')
+        .insert({
+          profile_id: typedSheet.profile_id,
+          category,
+          field_key: item.field_key ?? `${category}.unknown`,
+          value_json: finalValue,
+          source_type: 'document',
+          source_ref: typedSheet.artifact_id,
+          verification_status: 'verified',
+          verified_at: now,
+          verified_by: userId,
+          actor_id: userId,
+        })
+        .select('id')
+        .single();
 
-      // Audit event for fact creation
+      if (factError || !factData) continue;
+
+      factId = factData.id;
+
       await supabase.from('audit_events').insert({
         profile_id: typedSheet.profile_id,
         actor_id: userId,
@@ -514,7 +568,18 @@ export async function commitIntentSheet(
           source: 'intent_sheet_commit',
         },
       });
+    }
 
+    factsCreated++;
+    committedItems.push({
+      category,
+      fieldKey: item.field_key ?? `${category}.entry`,
+      value: finalValue as Record<string, unknown>,
+      factId,
+    });
+
+    // Skip smart task generation for updates — only generate for new facts
+    if (!isUpdate) {
       // ── Generate smart tasks (filtered by tier + context gates + dedup) ──
       const generator = CATEGORY_TASK_GENERATORS[category];
       if (generator) {
@@ -538,7 +603,7 @@ export async function commitIntentSheet(
               category,
               missingField: contextCheck.missingField!,
               reason: contextCheck.reason!,
-              relatedFactId: factData.id,
+              relatedFactId: factId,
             });
 
             // Audit: task not generated due to insufficient context
@@ -551,7 +616,7 @@ export async function commitIntentSheet(
                 category,
                 missing_field: contextCheck.missingField,
                 reason: contextCheck.reason,
-                profile_fact_id: factData.id,
+                profile_fact_id: factId,
               },
             });
 
@@ -596,7 +661,7 @@ export async function commitIntentSheet(
               event_type: 'task.created',
               metadata: {
                 task_id: stData.id,
-                profile_fact_id: factData.id,
+                profile_fact_id: factId,
                 category,
                 source: 'smart_generation',
                 trigger_source: st.triggerSource,

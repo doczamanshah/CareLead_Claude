@@ -27,7 +27,11 @@ THE PATIENT'S VOICE COMES FIRST.
 
 EXTRACT THESE BUCKETS:
 1. questions_and_concerns: Questions or concerns to raise with the doctor. Each is a short, plain-English line ("Discuss recurring headaches over the past 2 weeks", "Ask whether I should keep taking lisinopril").
-2. logistics: Anything the patient said about getting there (driver, ride, timing, mobility help, translator, what to bring). Free-form short strings.
+2. logistics: Transportation, timing, and items to bring. IMPORTANT — distinguish between:
+   - DRIVER / TRANSPORTATION: If the patient mentions someone taking them, driving them, dropping them off, or providing a ride ("my daughter will drive me", "my son will take me", "Sarah is driving", "I need a ride", "my wife is coming with me to drive"), extract that person's name into the "driver" field. This is NOT an item to bring.
+   - WHAT TO BRING: Physical items the patient should bring to the appointment ("bring medications", "bring insurance card", "bring lab results", "don't forget the referral"). These go into "what_to_bring".
+   - SPECIAL NEEDS: Mobility assistance, translator, wheelchair, etc. These go into "special_needs".
+   - NOTES: Other logistics info (parking, timing, directions) go into "notes".
 3. refills_needed: Medications the patient said they need refilled. Use plain medication names.
 4. ai_suggestions: 1-2 additional questions or items the patient did NOT mention but that you think are worth raising based on their profile (active conditions, current medications, allergies, recent measurements). Each must have a brief reason citing the profile context. Do not duplicate anything the patient already said. Return an empty array if nothing useful.
 
@@ -36,6 +40,7 @@ STRICT RULES:
 - Never invent symptoms, diagnoses, or medications the patient didn't mention.
 - Never give clinical advice. You are organizing the patient's own words, not diagnosing.
 - If the patient input is empty or unrelated to a medical visit, return empty arrays — never make things up.
+- CRITICAL: When someone says "my [person] will drive me" or "my [person] will take me" — that is a DRIVER, not an item to bring. Put it in logistics.driver, NOT logistics.what_to_bring.
 
 RESPONSE SHAPE (return EXACTLY this structure):
 {
@@ -43,7 +48,9 @@ RESPONSE SHAPE (return EXACTLY this structure):
     { "text": "string", "source": "patient" }
   ],
   "logistics": {
-    "notes": ["string"],
+    "driver": { "name": "string or null — the person driving/taking the patient" },
+    "what_to_bring": ["string — physical items to bring"],
+    "notes": ["string — other logistics notes"],
     "needs_driver": false,
     "special_needs": ["string"]
   },
@@ -198,14 +205,23 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    // Normalize the logistics object — map driver info properly
+    const rawLogistics = parsed.logistics ?? {};
+    const driverInfo = rawLogistics.driver;
+    const logistics = {
+      driver: driverInfo?.name
+        ? { name: driverInfo.name, user_id: null, notified: false }
+        : null,
+      what_to_bring: rawLogistics.what_to_bring ?? [],
+      notes: rawLogistics.notes ?? [],
+      needs_driver: rawLogistics.needs_driver ?? (driverInfo?.name ? false : false),
+      special_needs: rawLogistics.special_needs ?? [],
+    };
+
     return new Response(
       JSON.stringify({
         questions_and_concerns: parsed.questions_and_concerns ?? [],
-        logistics: parsed.logistics ?? {
-          notes: [],
-          needs_driver: false,
-          special_needs: [],
-        },
+        logistics,
         refills_needed: parsed.refills_needed ?? [],
         ai_suggestions: parsed.ai_suggestions ?? [],
       }),
