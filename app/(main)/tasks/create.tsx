@@ -4,6 +4,8 @@ import {
   Text,
   TouchableOpacity,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
   StyleSheet,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -95,11 +97,16 @@ export default function CreateTaskScreen() {
         <View style={styles.navSpacer} />
       </View>
 
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets
       >
         {/* Title */}
         <Input
@@ -241,6 +248,7 @@ export default function CreateTaskScreen() {
           />
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -250,6 +258,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.background.DEFAULT,
   },
+  flex: { flex: 1 },
   navBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',

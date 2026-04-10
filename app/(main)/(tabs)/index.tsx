@@ -1,14 +1,18 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
 import { ProfileCard } from '@/components/modules/ProfileCard';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { useAuth } from '@/hooks/useAuth';
 import { useTasks, useUpdateTaskStatus, useCreateTask } from '@/hooks/useTasks';
 import { useAppointments } from '@/hooks/useAppointments';
 import { useProactiveChecks } from '@/hooks/useProactiveChecks';
 import { useWeeklyDigest } from '@/hooks/usePreferences';
+import { useTodaysDoses, useRefillStatus, useMedications } from '@/hooks/useMedications';
+import { needsMedicationMigration, migrateMedicationFacts } from '@/services/medicationMigration';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { Task, ProactiveSuggestion } from '@/lib/types/tasks';
@@ -103,7 +107,30 @@ function isMonday(): boolean {
 
 export default function HomeScreen() {
   const { activeProfile, activeProfileId, profiles, switchProfile } = useActiveProfile();
+  const { user } = useAuth();
   const router = useRouter();
+  const queryClient = useQueryClient();
+
+  const { data: medications } = useMedications(activeProfileId);
+
+  // Auto-migrate medication profile_facts → med_medications on first load
+  const migrationRanRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeProfileId || !user?.id) return;
+    if (migrationRanRef.current === activeProfileId) return;
+
+    let cancelled = false;
+    (async () => {
+      const needed = await needsMedicationMigration(activeProfileId);
+      if (cancelled || !needed) return;
+      migrationRanRef.current = activeProfileId;
+      const result = await migrateMedicationFacts(activeProfileId, user.id);
+      if (!cancelled && result.success && result.data.migrated > 0) {
+        queryClient.invalidateQueries({ queryKey: ['medications'] });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeProfileId, user?.id, queryClient]);
 
   const { data: openTasks } = useTasks(activeProfileId, {
     status: ['pending', 'in_progress'],
@@ -165,6 +192,8 @@ export default function HomeScreen() {
 
   const { suggestions, dismissSuggestion } = useProactiveChecks(activeProfileId);
   const { enabled: weeklyDigestEnabled } = useWeeklyDigest();
+  const { data: todaysDoses } = useTodaysDoses(activeProfileId);
+  const { data: refillAlerts } = useRefillStatus(activeProfileId);
 
   // Build chain groups and individual tasks, filtered for "Today" view
   const { todayItems, chainGroups, overdueCount, totalOpen, remainingCount } = useMemo(() => {
@@ -702,6 +731,47 @@ export default function HomeScreen() {
         </View>
       )}
 
+      {/* Medications Section — always visible */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>Medications</Text>
+          <TouchableOpacity onPress={() => router.push('/(main)/medications')}>
+            <Text style={styles.seeAll}>See all</Text>
+          </TouchableOpacity>
+        </View>
+        {(medications ?? []).length === 0 ? (
+          <Card>
+            <Text style={styles.medEmptyText}>
+              No medications tracked yet — Add your first medication
+            </Text>
+            <TouchableOpacity
+              style={styles.medEmptyButton}
+              onPress={() => router.push('/(main)/medications/create')}
+            >
+              <Text style={styles.medEmptyButtonText}>Add Medication</Text>
+            </TouchableOpacity>
+          </Card>
+        ) : (
+          (() => {
+            const scheduled = (todaysDoses ?? []).filter((d) => !d.medication.prn_flag);
+            const takenCount = scheduled.filter((d) => d.adherenceToday === 'taken').length;
+            const dueRefills = (refillAlerts ?? []).filter((r) => r.status === 'due_soon' || r.status === 'overdue');
+            return (
+              <Card onPress={() => router.push('/(main)/medications')}>
+                <Text style={styles.medSummaryText}>
+                  {takenCount} of {scheduled.length} taken today
+                </Text>
+                {dueRefills.length > 0 && (
+                  <Text style={styles.medRefillAlert}>
+                    {dueRefills.length} refill{dueRefills.length !== 1 ? 's' : ''} need attention
+                  </Text>
+                )}
+              </Card>
+            );
+          })()
+        )}
+      </View>
+
       {/* Suggested Actions — proactive suggestions */}
       {suggestions.length > 0 && (
         <View style={styles.section}>
@@ -806,6 +876,14 @@ export default function HomeScreen() {
               <Text style={styles.chevron}>{'\u203A'}</Text>
             </View>
           </Card>
+          <TouchableOpacity
+            style={styles.profileLinkRow}
+            onPress={() => router.push('/(main)/medications')}
+          >
+            <Text style={styles.profileLinkIcon}>💊</Text>
+            <Text style={styles.profileLinkText}>Medications</Text>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
         </View>
       )}
     </ScreenLayout>
@@ -1121,6 +1199,27 @@ const styles = StyleSheet.create({
     color: COLORS.text.tertiary,
     marginTop: 2,
   },
+  profileLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginTop: 8,
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border.light,
+  },
+  profileLinkIcon: {
+    fontSize: 20,
+    marginRight: 10,
+  },
+  profileLinkText: {
+    flex: 1,
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.DEFAULT,
+  },
   chevron: {
     fontSize: FONT_SIZES['2xl'],
     color: COLORS.text.tertiary,
@@ -1238,5 +1337,34 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.sm,
     fontWeight: FONT_WEIGHTS.medium,
     color: COLORS.text.secondary,
+  },
+  // Medications home section
+  medEmptyText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    marginBottom: 8,
+  },
+  medEmptyButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: COLORS.primary.DEFAULT + '15',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  medEmptyButtonText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+  },
+  medSummaryText: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  medRefillAlert: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.accent.dark,
+    fontWeight: FONT_WEIGHTS.medium,
+    marginTop: 4,
   },
 });

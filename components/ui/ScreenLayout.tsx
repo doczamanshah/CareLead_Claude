@@ -1,4 +1,4 @@
-import { View, ScrollView, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ScrollView, Text, ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
@@ -9,6 +9,7 @@ interface ScreenLayoutProps {
   loading?: boolean;
   error?: Error | null;
   scrollable?: boolean;
+  keyboardAvoiding?: boolean;
 }
 
 export function ScreenLayout({
@@ -17,6 +18,7 @@ export function ScreenLayout({
   loading,
   error,
   scrollable = true,
+  keyboardAvoiding = true,
 }: ScreenLayoutProps) {
   if (loading) {
     return (
@@ -52,18 +54,31 @@ export function ScreenLayout({
     </>
   );
 
+  const inner = scrollable ? (
+    <ScrollView
+      style={styles.flex}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
+    >
+      {content}
+    </ScrollView>
+  ) : (
+    content
+  );
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      {scrollable ? (
-        <ScrollView
+      {keyboardAvoiding ? (
+        <KeyboardAvoidingView
           style={styles.flex}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
-          {content}
-        </ScrollView>
+          {inner}
+        </KeyboardAvoidingView>
       ) : (
-        content
+        inner
       )}
     </SafeAreaView>
   );

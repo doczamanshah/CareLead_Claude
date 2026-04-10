@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { getCategoryFromFieldKey } from '@/lib/utils/fieldLabels';
 import { getCareGuidanceLevel } from '@/services/preferences';
 import { findExistingProfileFact, describeFactChanges, getIdentifyingFieldForCategory } from '@/services/profileFactUpsert';
+import { createMedicationFromExtraction } from '@/services/medicationSync';
 import type { IntentItem, IntentSheet } from '@/lib/types/intent-sheet';
 import type { ProfileFactCategory } from '@/lib/types/profile';
 import type { TaskContextJson, TaskPriority } from '@/lib/types/tasks';
@@ -577,6 +578,16 @@ export async function commitIntentSheet(
       value: finalValue as Record<string, unknown>,
       factId,
     });
+
+    // Create dedicated medication record alongside the profile fact
+    if (category === 'medication' && !isUpdate) {
+      await createMedicationFromExtraction(
+        typedSheet.profile_id,
+        finalValue as Record<string, unknown>,
+        factId,
+        userId,
+      );
+    }
 
     // Skip smart task generation for updates — only generate for new facts
     if (!isUpdate) {
