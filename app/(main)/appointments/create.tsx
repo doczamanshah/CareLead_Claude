@@ -11,6 +11,7 @@ import {
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Input } from '@/components/ui/Input';
+import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useCreateAppointment } from '@/hooks/useAppointments';
@@ -50,27 +51,6 @@ function buildDateTime(dayOffset: number, hour: number, minute: number): string 
   return date.toISOString();
 }
 
-function parseCustomDateTime(dateStr: string, timeStr: string): string | null {
-  // Expects YYYY-MM-DD and HH:MM (24h)
-  const dateMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})$/);
-  if (!dateMatch || !timeMatch) return null;
-
-  const [, y, m, d] = dateMatch;
-  const [, h, mi] = timeMatch;
-  const date = new Date(
-    Number(y),
-    Number(m) - 1,
-    Number(d),
-    Number(h),
-    Number(mi),
-    0,
-    0,
-  );
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
-}
-
 export default function CreateAppointmentScreen() {
   const router = useRouter();
   const { activeProfileId } = useActiveProfile();
@@ -94,8 +74,8 @@ export default function CreateAppointmentScreen() {
 
   const [dateIdx, setDateIdx] = useState<number | null>(null);
   const [timeIdx, setTimeIdx] = useState<number | null>(null);
-  const [customDate, setCustomDate] = useState('');
-  const [customTime, setCustomTime] = useState('');
+  const [pickerDate, setPickerDate] = useState<Date | null>(null);
+  const [pickerTime, setPickerTime] = useState<Date | null>(null);
 
   const [titleError, setTitleError] = useState('');
   const [dateError, setDateError] = useState('');
@@ -108,16 +88,25 @@ export default function CreateAppointmentScreen() {
     if (!activeProfileId) return;
 
     let startTime: string | null = null;
-    if (customDate && customTime) {
-      startTime = parseCustomDateTime(customDate, customTime);
-      if (!startTime) {
-        setDateError('Use YYYY-MM-DD and HH:MM (24h) formats');
-        return;
-      }
+    if (pickerDate && pickerTime) {
+      const merged = new Date(pickerDate);
+      merged.setHours(pickerTime.getHours(), pickerTime.getMinutes(), 0, 0);
+      startTime = merged.toISOString();
     } else if (dateIdx !== null && timeIdx !== null) {
       const d = DATE_OPTIONS[dateIdx];
       const t = TIME_OPTIONS[timeIdx];
       startTime = buildDateTime(d.days, t.hour, t.minute);
+    } else if (pickerDate && timeIdx !== null) {
+      const t = TIME_OPTIONS[timeIdx];
+      const merged = new Date(pickerDate);
+      merged.setHours(t.hour, t.minute, 0, 0);
+      startTime = merged.toISOString();
+    } else if (dateIdx !== null && pickerTime) {
+      const d = DATE_OPTIONS[dateIdx];
+      const base = new Date();
+      base.setDate(base.getDate() + d.days);
+      base.setHours(pickerTime.getHours(), pickerTime.getMinutes(), 0, 0);
+      startTime = base.toISOString();
     }
 
     if (!startTime) {
@@ -275,7 +264,7 @@ export default function CreateAppointmentScreen() {
                 style={[styles.chip, dateIdx === idx && styles.chipActive]}
                 onPress={() => {
                   setDateIdx(dateIdx === idx ? null : idx);
-                  setCustomDate('');
+                  setPickerDate(null);
                   setDateError('');
                 }}
               >
@@ -285,16 +274,16 @@ export default function CreateAppointmentScreen() {
               </TouchableOpacity>
             ))}
           </View>
-          <Input
-            placeholder="Or custom date (YYYY-MM-DD)"
-            value={customDate}
-            onChangeText={(text) => {
-              setCustomDate(text);
-              if (text) setDateIdx(null);
+          <DatePicker
+            placeholder="Or pick a custom date"
+            value={pickerDate}
+            onChange={(date) => {
+              setPickerDate(date);
+              if (date) setDateIdx(null);
               setDateError('');
             }}
-            autoCapitalize="none"
-            autoCorrect={false}
+            mode="date"
+            minimumDate={new Date()}
           />
         </View>
 
@@ -308,7 +297,7 @@ export default function CreateAppointmentScreen() {
                 style={[styles.chip, timeIdx === idx && styles.chipActive]}
                 onPress={() => {
                   setTimeIdx(timeIdx === idx ? null : idx);
-                  setCustomTime('');
+                  setPickerTime(null);
                   setDateError('');
                 }}
               >
@@ -318,16 +307,15 @@ export default function CreateAppointmentScreen() {
               </TouchableOpacity>
             ))}
           </View>
-          <Input
-            placeholder="Or custom time (HH:MM, 24h)"
-            value={customTime}
-            onChangeText={(text) => {
-              setCustomTime(text);
-              if (text) setTimeIdx(null);
+          <DatePicker
+            placeholder="Or pick a custom time"
+            value={pickerTime}
+            onChange={(time) => {
+              setPickerTime(time);
+              if (time) setTimeIdx(null);
               setDateError('');
             }}
-            autoCapitalize="none"
-            autoCorrect={false}
+            mode="time"
           />
           {dateError ? <Text style={styles.errorText}>{dateError}</Text> : null}
         </View>

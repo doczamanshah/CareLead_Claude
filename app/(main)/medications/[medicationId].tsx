@@ -13,6 +13,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
+import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
 import {
   useMedicationDetail,
@@ -89,6 +90,7 @@ export default function MedicationDetailScreen() {
 
   const [isEditing, setIsEditing] = useState(false);
   const [editState, setEditState] = useState<EditState | null>(null);
+  const [lastFillDatePicker, setLastFillDatePicker] = useState<Date | null>(null);
 
   if (isLoading || !med) {
     return (
@@ -146,12 +148,16 @@ export default function MedicationDetailScreen() {
       refills_remaining: supply?.refills_remaining != null ? String(supply.refills_remaining) : '',
       notes: med.notes ?? '',
     });
+    setLastFillDatePicker(
+      supply?.last_fill_date ? new Date(supply.last_fill_date) : null,
+    );
     setIsEditing(true);
   }
 
   function cancelEditing() {
     setIsEditing(false);
     setEditState(null);
+    setLastFillDatePicker(null);
   }
 
   async function saveEdits() {
@@ -194,7 +200,9 @@ export default function MedicationDetailScreen() {
         params: {
           pharmacy_name: editState.pharmacy_name.trim() || null,
           prescriber_name: editState.prescriber_name.trim() || null,
-          last_fill_date: editState.last_fill_date.trim() || null,
+          last_fill_date: lastFillDatePicker
+            ? lastFillDatePicker.toISOString().split('T')[0]
+            : editState.last_fill_date.trim() || null,
           days_supply: editState.days_supply ? Number(editState.days_supply) : null,
           refills_remaining: editState.refills_remaining ? Number(editState.refills_remaining) : null,
         },
@@ -353,13 +361,18 @@ export default function MedicationDetailScreen() {
                 onChangeText={(v) => setEditState((s) => s && { ...s, prescriber_name: v })}
               />
 
-              <Input
+              <DatePicker
                 label="Last Fill Date"
-                placeholder="YYYY-MM-DD"
-                value={editState.last_fill_date}
-                onChangeText={(v) => setEditState((s) => s && { ...s, last_fill_date: v })}
-                autoCapitalize="none"
-                autoCorrect={false}
+                placeholder="Select last fill date"
+                value={lastFillDatePicker}
+                onChange={(date) => {
+                  setLastFillDatePicker(date);
+                  setEditState((s) =>
+                    s && { ...s, last_fill_date: date ? date.toISOString().split('T')[0] : '' },
+                  );
+                }}
+                mode="date"
+                maximumDate={new Date()}
               />
 
               <Input

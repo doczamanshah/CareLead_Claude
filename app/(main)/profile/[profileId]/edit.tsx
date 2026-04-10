@@ -3,6 +3,7 @@ import { View, Text, Alert, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Input } from '@/components/ui/Input';
+import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
 import { useProfileDetail, useUpdateProfile } from '@/hooks/useProfileDetail';
 import { COLORS } from '@/lib/constants/colors';
@@ -17,13 +18,13 @@ export default function EditProfileScreen() {
   const router = useRouter();
 
   const [displayName, setDisplayName] = useState('');
-  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState<Date | null>(null);
   const [gender, setGender] = useState('');
 
   useEffect(() => {
     if (profile) {
       setDisplayName(profile.display_name);
-      setDateOfBirth(profile.date_of_birth ?? '');
+      setDateOfBirth(profile.date_of_birth ? new Date(profile.date_of_birth) : null);
       setGender(profile.gender ?? '');
     }
   }, [profile]);
@@ -36,16 +37,7 @@ export default function EditProfileScreen() {
       return;
     }
 
-    // Validate date format if provided
-    let dob: string | null = null;
-    if (dateOfBirth.trim()) {
-      const parsed = new Date(dateOfBirth.trim());
-      if (isNaN(parsed.getTime())) {
-        Alert.alert('Invalid date', 'Please enter a valid date (YYYY-MM-DD).');
-        return;
-      }
-      dob = dateOfBirth.trim();
-    }
+    const dob = dateOfBirth ? dateOfBirth.toISOString().split('T')[0] : null;
 
     updateMutation.mutate(
       {
@@ -75,12 +67,13 @@ export default function EditProfileScreen() {
           autoCapitalize="words"
         />
 
-        <Input
+        <DatePicker
           label="Date of Birth"
-          placeholder="YYYY-MM-DD"
+          placeholder="Select date of birth"
           value={dateOfBirth}
-          onChangeText={setDateOfBirth}
-          keyboardType="numbers-and-punctuation"
+          onChange={setDateOfBirth}
+          mode="date"
+          maximumDate={new Date()}
         />
 
         <View style={styles.genderSection}>

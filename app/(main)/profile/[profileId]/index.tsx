@@ -4,6 +4,7 @@ import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
 import { useProfileDetail } from '@/hooks/useProfileDetail';
 import { useProfileGaps } from '@/hooks/useProfileGaps';
+import { useAccessGrants } from '@/hooks/useCaregivers';
 import { PROFILE_FACT_CATEGORIES } from '@/lib/types/profile';
 import type { ProfileFact, ProfileFactCategory } from '@/lib/types/profile';
 import { COLORS } from '@/lib/constants/colors';
@@ -23,6 +24,7 @@ export default function ProfileOverviewScreen() {
   const { profileId } = useLocalSearchParams<{ profileId: string }>();
   const { data: profile, isLoading, error } = useProfileDetail(profileId ?? null);
   const { data: gaps } = useProfileGaps(profileId);
+  const { data: accessGrants } = useAccessGrants(profileId ?? null);
   const router = useRouter();
 
   if (isLoading) return <ScreenLayout loading />;
@@ -106,6 +108,51 @@ export default function ProfileOverviewScreen() {
           />
         );
       })}
+
+      {/* Who Has Access */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionLabel}>Who Has Access</Text>
+        </View>
+        {(() => {
+          const activeGrants = (accessGrants ?? []).filter((g) => g.status === 'active');
+          if (activeGrants.length === 0) {
+            return (
+              <Card
+                onPress={() =>
+                  router.push({
+                    pathname: '/(main)/caregivers/invite',
+                    params: { profileId },
+                  })
+                }
+              >
+                <View style={styles.emptyCategory}>
+                  <Text style={styles.emptyCategoryText}>
+                    No caregivers have access
+                  </Text>
+                  <Text style={styles.addText}>+ Invite</Text>
+                </View>
+              </Card>
+            );
+          }
+          return (
+            <Card
+              onPress={() =>
+                router.push({
+                  pathname: '/(main)/caregivers/',
+                  params: { profileId },
+                })
+              }
+            >
+              <Text style={styles.factValue}>
+                {activeGrants.length}{' '}
+                {activeGrants.length === 1 ? 'caregiver' : 'caregivers'}
+              </Text>
+              <Text style={styles.addMoreText}>Manage Access</Text>
+            </Card>
+          );
+        })()}
+      </View>
     </ScreenLayout>
   );
 }

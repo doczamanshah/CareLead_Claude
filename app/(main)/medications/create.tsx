@@ -15,6 +15,7 @@ import {
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Input } from '@/components/ui/Input';
+import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useCreateMedication } from '@/hooks/useMedications';
@@ -121,6 +122,7 @@ export default function CreateMedicationScreen() {
   const [fields, setFields] = useState<ExtractedFields>({ ...EMPTY_FIELDS });
   const [aiFilledKeys, setAiFilledKeys] = useState<Set<string>>(new Set());
   const [showSupply, setShowSupply] = useState(false);
+  const [lastFillDatePicker, setLastFillDatePicker] = useState<Date | null>(null);
   const inputRef = useRef<TextInput>(null);
 
   const hasText = freeText.trim().length > 0;
@@ -258,6 +260,10 @@ export default function CreateMedicationScreen() {
           setFields(filled);
           setAiFilledKeys(filledKeys);
           setShowSupply(!!hasSupplyFields);
+          if (filled.last_fill_date) {
+            const parsed = new Date(filled.last_fill_date);
+            if (!isNaN(parsed.getTime())) setLastFillDatePicker(parsed);
+          }
           setStep('form');
           return;
         }
@@ -302,7 +308,9 @@ export default function CreateMedicationScreen() {
         instructions: fields.instructions.trim() || undefined,
         pharmacy_name: fields.pharmacy_name.trim() || undefined,
         prescriber_name: fields.prescriber_name.trim() || undefined,
-        last_fill_date: fields.last_fill_date.trim() || undefined,
+        last_fill_date: lastFillDatePicker
+          ? lastFillDatePicker.toISOString().split('T')[0]
+          : fields.last_fill_date.trim() || undefined,
         days_supply: fields.days_supply ? Number(fields.days_supply) : undefined,
         refills_remaining: fields.refills_remaining ? Number(fields.refills_remaining) : undefined,
       },
@@ -576,12 +584,18 @@ export default function CreateMedicationScreen() {
                 </FieldWithIndicator>
 
                 <FieldWithIndicator label="Last Fill Date" filled={aiFilledKeys.has('last_fill_date')}>
-                  <Input
-                    placeholder="YYYY-MM-DD"
-                    value={fields.last_fill_date}
-                    onChangeText={(v) => setFields((f) => ({ ...f, last_fill_date: v }))}
-                    autoCapitalize="none"
-                    autoCorrect={false}
+                  <DatePicker
+                    placeholder="Select last fill date"
+                    value={lastFillDatePicker}
+                    onChange={(date) => {
+                      setLastFillDatePicker(date);
+                      setFields((f) => ({
+                        ...f,
+                        last_fill_date: date ? date.toISOString().split('T')[0] : '',
+                      }));
+                    }}
+                    mode="date"
+                    maximumDate={new Date()}
                   />
                 </FieldWithIndicator>
 

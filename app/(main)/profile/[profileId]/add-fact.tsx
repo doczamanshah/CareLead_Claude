@@ -3,12 +3,15 @@ import { View, Text, Alert, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Input } from '@/components/ui/Input';
+import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
 import { useAddProfileFact } from '@/hooks/useProfileDetail';
 import { PROFILE_FACT_CATEGORIES } from '@/lib/types/profile';
 import type { ProfileFactCategory } from '@/lib/types/profile';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+
+const DATE_FIELD_KEYS = new Set(['diagnosed_date', 'date', 'target_date']);
 
 // Field definitions per category
 const CATEGORY_FIELDS: Record<ProfileFactCategory, { key: string; label: string; placeholder: string }[]> = {
@@ -95,9 +98,14 @@ export default function AddFactScreen() {
   const fields = CATEGORY_FIELDS[categoryKey] ?? [];
 
   const [values, setValues] = useState<Record<string, string>>({});
+  const [dateValues, setDateValues] = useState<Record<string, Date | null>>({});
 
   function updateField(key: string, value: string) {
     setValues((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function updateDateField(key: string, date: Date | null) {
+    setDateValues((prev) => ({ ...prev, [key]: date }));
   }
 
   // Get the primary field key for this category
@@ -117,8 +125,13 @@ export default function AddFactScreen() {
     // Build value_json from non-empty fields
     const valueJson: Record<string, unknown> = {};
     for (const field of fields) {
-      const val = values[field.key]?.trim();
-      if (val) valueJson[field.key] = val;
+      if (DATE_FIELD_KEYS.has(field.key)) {
+        const dateVal = dateValues[field.key];
+        if (dateVal) valueJson[field.key] = dateVal.toISOString().split('T')[0];
+      } else {
+        const val = values[field.key]?.trim();
+        if (val) valueJson[field.key] = val;
+      }
     }
 
     addMutation.mutate(
@@ -150,16 +163,28 @@ export default function AddFactScreen() {
         </Text>
       </View>
 
-      {fields.map((field) => (
-        <Input
-          key={field.key}
-          label={field.label}
-          placeholder={field.placeholder}
-          value={values[field.key] ?? ''}
-          onChangeText={(text) => updateField(field.key, text)}
-          autoCapitalize={field.key === 'notes' ? 'sentences' : 'words'}
-        />
-      ))}
+      {fields.map((field) =>
+        DATE_FIELD_KEYS.has(field.key) ? (
+          <DatePicker
+            key={field.key}
+            label={field.label}
+            placeholder={`Select ${field.label.toLowerCase()}`}
+            value={dateValues[field.key] ?? null}
+            onChange={(date) => updateDateField(field.key, date)}
+            mode="date"
+            maximumDate={field.key === 'target_date' ? undefined : new Date()}
+          />
+        ) : (
+          <Input
+            key={field.key}
+            label={field.label}
+            placeholder={field.placeholder}
+            value={values[field.key] ?? ''}
+            onChangeText={(text) => updateField(field.key, text)}
+            autoCapitalize={field.key === 'notes' ? 'sentences' : 'words'}
+          />
+        ),
+      )}
 
       <View style={styles.saveButton}>
         <Button

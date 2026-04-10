@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useCreateTask, useHouseholdMembers } from '@/hooks/useTasks';
 import { Input } from '@/components/ui/Input';
+import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
@@ -54,6 +55,7 @@ export default function CreateTaskScreen() {
   const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<TaskPriority>('medium');
   const [selectedDueDateIdx, setSelectedDueDateIdx] = useState<number | null>(null);
+  const [customDueDate, setCustomDueDate] = useState<Date | null>(null);
   const [assignedTo, setAssignedTo] = useState<string | null>(null);
   const [titleError, setTitleError] = useState('');
 
@@ -65,10 +67,17 @@ export default function CreateTaskScreen() {
 
     if (!activeProfileId) return;
 
-    const dueDate =
-      selectedDueDateIdx !== null && DUE_DATE_OPTIONS[selectedDueDateIdx].days >= 0
-        ? addDays(DUE_DATE_OPTIONS[selectedDueDateIdx].days)
-        : undefined;
+    let dueDate: string | undefined;
+    if (customDueDate) {
+      const d = new Date(customDueDate);
+      d.setHours(17, 0, 0, 0);
+      dueDate = d.toISOString();
+    } else if (
+      selectedDueDateIdx !== null &&
+      DUE_DATE_OPTIONS[selectedDueDateIdx].days >= 0
+    ) {
+      dueDate = addDays(DUE_DATE_OPTIONS[selectedDueDateIdx].days);
+    }
 
     createTask.mutate(
       {
@@ -172,9 +181,10 @@ export default function CreateTaskScreen() {
                   styles.dueDateChip,
                   selectedDueDateIdx === idx && styles.dueDateChipActive,
                 ]}
-                onPress={() =>
-                  setSelectedDueDateIdx(selectedDueDateIdx === idx ? null : idx)
-                }
+                onPress={() => {
+                  setSelectedDueDateIdx(selectedDueDateIdx === idx ? null : idx);
+                  setCustomDueDate(null);
+                }}
               >
                 <Text
                   style={[
@@ -187,6 +197,16 @@ export default function CreateTaskScreen() {
               </TouchableOpacity>
             ))}
           </View>
+          <DatePicker
+            placeholder="Or pick a custom date"
+            value={customDueDate}
+            onChange={(date) => {
+              setCustomDueDate(date);
+              if (date) setSelectedDueDateIdx(null);
+            }}
+            mode="date"
+            minimumDate={new Date()}
+          />
         </View>
 
         {/* Assign to */}
