@@ -68,6 +68,7 @@ const QUICK_ACTIONS = [
 const MODULE_CARDS = [
   { key: 'medications', icon: 'medkit' as const, label: 'Meds', route: '/(main)/medications' },
   { key: 'appointments', icon: 'calendar' as const, label: 'Appts', route: '/(main)/appointments' },
+  { key: 'billing', icon: 'receipt' as const, label: 'Bills', route: '/(main)/billing' },
   { key: 'caregivers', icon: 'people' as const, label: 'Care Team', route: '/(main)/caregivers' },
   { key: 'documents', icon: 'document-text' as const, label: 'Docs', route: '/(main)/(tabs)/documents' },
 ];
