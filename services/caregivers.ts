@@ -91,6 +91,10 @@ export async function createInvite(
   params: CreateInviteParams,
   userId: string,
 ): Promise<ServiceResult<CaregiverInvite>> {
+  if (!params.invited_email && !params.invited_phone) {
+    return { success: false, error: 'An email or phone number is required.' };
+  }
+
   const template = PERMISSION_TEMPLATE_MAP[params.permission_template];
   if (!template) {
     return { success: false, error: `Unknown permission template: ${params.permission_template}` };
@@ -108,7 +112,8 @@ export async function createInvite(
     .insert({
       household_id: householdId,
       invited_by_user_id: userId,
-      invited_email: params.invited_email.toLowerCase().trim(),
+      invited_email: params.invited_email?.toLowerCase().trim() || null,
+      invited_phone: params.invited_phone?.trim() || null,
       invited_name: params.invited_name?.trim() || null,
       profile_ids: params.profile_ids,
       permission_template: params.permission_template,
@@ -132,7 +137,8 @@ export async function createInvite(
       metadata: {
         invite_id: data.id,
         permission_template: params.permission_template,
-        invited_email: params.invited_email.toLowerCase().trim(),
+        ...(params.invited_email ? { invited_email: params.invited_email.toLowerCase().trim() } : {}),
+        ...(params.invited_phone ? { invited_phone: params.invited_phone.trim() } : {}),
       },
     });
   }

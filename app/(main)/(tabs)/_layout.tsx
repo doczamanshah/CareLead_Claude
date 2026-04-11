@@ -1,21 +1,22 @@
 import { Tabs } from 'expo-router';
-import { Text } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '@/lib/constants/colors';
 
-function TabIcon({ name, focused }: { name: string; focused: boolean }) {
-  const icons: Record<string, string> = {
-    Home: '🏠',
-    Tasks: '✓',
-    Documents: '📄',
-    Household: '👥',
-    Settings: '⚙️',
-  };
-  return (
-    <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.5 }}>
-      {icons[name] ?? '•'}
-    </Text>
-  );
-}
+const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
+  index: 'home',
+  tasks: 'checkmark-circle',
+  documents: 'document-text',
+  household: 'people',
+  settings: 'settings',
+};
+
+const TAB_ICONS_OUTLINE: Record<string, keyof typeof Ionicons.glyphMap> = {
+  index: 'home-outline',
+  tasks: 'checkmark-circle-outline',
+  documents: 'document-text-outline',
+  household: 'people-outline',
+  settings: 'settings-outline',
+};
 
 export default function TabLayout() {
   return (
@@ -40,35 +41,65 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Home',
-          tabBarIcon: ({ focused }) => <TabIcon name="Home" focused={focused} />,
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? TAB_ICONS.index : TAB_ICONS_OUTLINE.index}
+              size={size}
+              color={color}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="tasks"
         options={{
           title: 'Tasks',
-          tabBarIcon: ({ focused }) => <TabIcon name="Tasks" focused={focused} />,
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? TAB_ICONS.tasks : TAB_ICONS_OUTLINE.tasks}
+              size={size}
+              color={color}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="documents"
         options={{
           title: 'Documents',
-          tabBarIcon: ({ focused }) => <TabIcon name="Documents" focused={focused} />,
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? TAB_ICONS.documents : TAB_ICONS_OUTLINE.documents}
+              size={size}
+              color={color}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="household"
         options={{
           title: 'Household',
-          tabBarIcon: ({ focused }) => <TabIcon name="Household" focused={focused} />,
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? TAB_ICONS.household : TAB_ICONS_OUTLINE.household}
+              size={size}
+              color={color}
+            />
+          ),
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
-          tabBarIcon: ({ focused }) => <TabIcon name="Settings" focused={focused} />,
+          tabBarIcon: ({ focused, color, size }) => (
+            <Ionicons
+              name={focused ? TAB_ICONS.settings : TAB_ICONS_OUTLINE.settings}
+              size={size}
+              color={color}
+            />
+          ),
         }}
       />
     </Tabs>

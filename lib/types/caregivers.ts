@@ -51,7 +51,8 @@ export interface CaregiverInvite {
   id: string;
   household_id: string;
   invited_by_user_id: string;
-  invited_email: string;
+  invited_email: string | null;
+  invited_phone: string | null;
   invited_name: string | null;
   profile_ids: string[];
   permission_template: PermissionTemplateId;
@@ -66,7 +67,8 @@ export interface CaregiverInvite {
 // ── Service Params ───────────────────────────────────────────────────
 
 export interface CreateInviteParams {
-  invited_email: string;
+  invited_email?: string;
+  invited_phone?: string;
   invited_name?: string;
   profile_ids: string[];
   permission_template: PermissionTemplateId;

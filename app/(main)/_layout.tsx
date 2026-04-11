@@ -10,6 +10,7 @@ export default function MainLayout() {
       }}
     >
       <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="today" options={{ animation: 'slide_from_right', headerShown: false }} />
       <Stack.Screen name="profile" options={{ animation: 'slide_from_right' }} />
       <Stack.Screen name="capture" options={{ animation: 'slide_from_right' }} />
       <Stack.Screen name="intent-sheet" options={{ animation: 'slide_from_right' }} />

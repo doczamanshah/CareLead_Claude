@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, Text, TouchableOpacity, Alert, StyleSheet, Share } from 'react-native';
+import { View, Text, TouchableOpacity, Alert, StyleSheet, Share, Platform } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
@@ -13,7 +13,8 @@ import type { PermissionTemplateId } from '@/lib/constants/permissionTemplates';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 
-type Step = 'info' | 'profiles' | 'permissions' | 'review';
+type Step = 'info' | 'profiles' | 'permissions' | 'review' | 'success';
+type ContactMethod = 'email' | 'phone';
 
 export default function InviteCaregiverScreen() {
   const router = useRouter();
@@ -25,12 +26,17 @@ export default function InviteCaregiverScreen() {
   const [step, setStep] = useState<Step>('info');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [contactMethod, setContactMethod] = useState<ContactMethod>('email');
   const [selectedProfiles, setSelectedProfiles] = useState<string[]>(
     params.profileId ? [params.profileId] : [],
   );
   const [selectedTemplate, setSelectedTemplate] = useState<PermissionTemplateId>('view_only');
+  const [createdToken, setCreatedToken] = useState<string | null>(null);
 
   const householdId = activeProfile?.household_id;
+  const inviteeName = name || email || phone || 'this person';
+  const patientName = activeProfile?.display_name || 'Your family';
 
   function toggleProfile(id: string) {
     setSelectedProfiles((prev) =>
@@ -39,13 +45,26 @@ export default function InviteCaregiverScreen() {
   }
 
   function validateInfo(): boolean {
-    if (!email.trim()) {
-      Alert.alert('Required', 'Please enter an email address.');
-      return false;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      Alert.alert('Invalid', 'Please enter a valid email address.');
-      return false;
+    if (contactMethod === 'email') {
+      if (!email.trim()) {
+        Alert.alert('Required', 'Please enter an email address.');
+        return false;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+        Alert.alert('Invalid', 'Please enter a valid email address.');
+        return false;
+      }
+    } else {
+      if (!phone.trim()) {
+        Alert.alert('Required', 'Please enter a phone number.');
+        return false;
+      }
+      // Basic phone validation: at least 7 digits
+      const digits = phone.replace(/\D/g, '');
+      if (digits.length < 7) {
+        Alert.alert('Invalid', 'Please enter a valid phone number.');
+        return false;
+      }
     }
     return true;
   }
@@ -58,7 +77,18 @@ export default function InviteCaregiverScreen() {
     return true;
   }
 
-  async function handleSend() {
+  function getShareMessage(): string {
+    const inviteLink = `carelead://invite/${createdToken}`;
+    const appStoreLink = '[App Store link coming soon]';
+
+    if (contactMethod === 'email') {
+      return `Hello,\n\n${patientName} has invited you to help manage care on CareLead.\n\nTap this link to accept the invitation:\n${inviteLink}\n\nIf you don't have CareLead yet, download it here:\n${appStoreLink}\n\nOr enter this invite code manually: ${createdToken}`;
+    }
+
+    return `${patientName} has invited you to help manage care on CareLead. Tap this link to join: ${inviteLink}\n\nDownload CareLead: ${appStoreLink}`;
+  }
+
+  async function handleCreateAndShare() {
     if (!householdId) {
       Alert.alert('Error', 'No household found.');
       return;
@@ -68,7 +98,8 @@ export default function InviteCaregiverScreen() {
       {
         householdId,
         params: {
-          invited_email: email.trim(),
+          invited_email: email.trim() || undefined,
+          invited_phone: phone.trim() || undefined,
           invited_name: name.trim() || undefined,
           profile_ids: selectedProfiles,
           permission_template: selectedTemplate,
@@ -76,20 +107,66 @@ export default function InviteCaregiverScreen() {
       },
       {
         onSuccess: async (invite) => {
-          // Share the invite token (in v1, no email sending — share link instead)
+          setCreatedToken(invite.token);
+          setStep('success');
+
+          // Open share sheet
           try {
-            await Share.share({
-              message: `You've been invited to help manage care on CareLead! Use this invite code to get started: ${invite.token}`,
-            });
+            const inviteLink = `carelead://invite/${invite.token}`;
+            const appStoreLink = '[App Store link coming soon]';
+
+            let message: string;
+            if (contactMethod === 'email') {
+              message = `Hello,\n\n${patientName} has invited you to help manage care on CareLead.\n\nTap this link to accept the invitation:\n${inviteLink}\n\nIf you don't have CareLead yet, download it here:\n${appStoreLink}\n\nOr enter this invite code manually: ${invite.token}`;
+            } else {
+              message = `${patientName} has invited you to help manage care on CareLead. Tap this link to join: ${inviteLink}\n\nDownload CareLead: ${appStoreLink}`;
+            }
+
+            await Share.share({ message });
           } catch {
-            // User cancelled share — that's fine
+            // User cancelled share — that's fine, they're on the success screen
           }
-          router.back();
         },
         onError: (err) => {
           Alert.alert('Error', err.message);
         },
       },
+    );
+  }
+
+  async function handleShareAgain() {
+    if (!createdToken) return;
+    try {
+      await Share.share({ message: getShareMessage() });
+    } catch {
+      // User cancelled
+    }
+  }
+
+  function renderContactMethodToggle() {
+    return (
+      <View style={styles.toggleRow}>
+        <TouchableOpacity
+          style={[styles.toggleButton, contactMethod === 'email' && styles.toggleButtonActive]}
+          onPress={() => setContactMethod('email')}
+        >
+          <Text
+            style={[styles.toggleText, contactMethod === 'email' && styles.toggleTextActive]}
+          >
+            Email
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.toggleButton, contactMethod === 'phone' && styles.toggleButtonActive]}
+          onPress={() => setContactMethod('phone')}
+        >
+          <Text
+            style={[styles.toggleText, contactMethod === 'phone' && styles.toggleTextActive]}
+          >
+            Phone Number
+          </Text>
+        </TouchableOpacity>
+      </View>
     );
   }
 
@@ -100,7 +177,7 @@ export default function InviteCaregiverScreen() {
           <View>
             <Text style={styles.stepTitle}>Who are you inviting?</Text>
             <Text style={styles.stepDescription}>
-              Enter their name and email. They'll receive an invite to join your care team.
+              Enter their name and how to reach them. You'll share the invite yourself.
             </Text>
             <Input
               label="Name (optional)"
@@ -109,14 +186,25 @@ export default function InviteCaregiverScreen() {
               onChangeText={setName}
               autoCapitalize="words"
             />
-            <Input
-              label="Email"
-              placeholder="caregiver@example.com"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
+            {renderContactMethodToggle()}
+            {contactMethod === 'email' ? (
+              <Input
+                label="Email"
+                placeholder="caregiver@example.com"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            ) : (
+              <Input
+                label="Phone Number"
+                placeholder="(555) 123-4567"
+                value={phone}
+                onChangeText={setPhone}
+                keyboardType="phone-pad"
+              />
+            )}
             <View style={styles.stepActions}>
               <Button
                 title="Next"
@@ -221,11 +309,12 @@ export default function InviteCaregiverScreen() {
           </View>
         );
 
-      case 'review':
+      case 'review': {
         const template = PERMISSION_TEMPLATES.find((t) => t.id === selectedTemplate);
         const selectedProfileNames = profiles
           .filter((p) => selectedProfiles.includes(p.id))
           .map((p) => p.display_name);
+        const contactDisplay = contactMethod === 'email' ? email : phone;
         return (
           <View>
             <Text style={styles.stepTitle}>Review Invitation</Text>
@@ -234,8 +323,15 @@ export default function InviteCaregiverScreen() {
               <View style={styles.reviewRow}>
                 <Text style={styles.reviewLabel}>Inviting</Text>
                 <Text style={styles.reviewValue}>
-                  {name || email}
-                  {name ? `\n${email}` : ''}
+                  {name || contactDisplay}
+                  {name ? `\n${contactDisplay}` : ''}
+                </Text>
+              </View>
+              <View style={styles.reviewDivider} />
+              <View style={styles.reviewRow}>
+                <Text style={styles.reviewLabel}>Contact</Text>
+                <Text style={styles.reviewValue}>
+                  {contactMethod === 'email' ? 'Email' : 'Phone'}
                 </Text>
               </View>
               <View style={styles.reviewDivider} />
@@ -256,9 +352,9 @@ export default function InviteCaregiverScreen() {
             </Card>
 
             <Text style={styles.consentNote}>
-              By sending this invitation, you consent to sharing the selected profile data with this
+              By creating this invitation, you consent to sharing the selected profile data with this
               caregiver at the chosen permission level. A consent record will be created for your
-              records.
+              records. You'll choose how to deliver the invite via the share sheet.
             </Text>
 
             <View style={styles.stepActions}>
@@ -268,9 +364,50 @@ export default function InviteCaregiverScreen() {
                 onPress={() => setStep('permissions')}
               />
               <Button
-                title="Send Invitation"
-                onPress={handleSend}
+                title="Create & Share Invite"
+                onPress={handleCreateAndShare}
                 loading={createInvite.isPending}
+              />
+            </View>
+          </View>
+        );
+      }
+
+      case 'success':
+        return (
+          <View style={styles.successContainer}>
+            <View style={styles.successIcon}>
+              <Text style={styles.successIconText}>✓</Text>
+            </View>
+            <Text style={styles.successTitle}>Invite Created!</Text>
+            <Text style={styles.successDescription}>
+              Once {name || 'they'} accept{name ? 's' : ''}, they'll appear in your care team.
+            </Text>
+
+            <Card style={styles.tokenCard}>
+              <Text style={styles.tokenLabel}>Invite Link</Text>
+              <Text style={styles.tokenValue} selectable>
+                carelead://invite/{createdToken}
+              </Text>
+              <View style={styles.tokenDivider} />
+              <Text style={styles.tokenLabel}>Or share this code</Text>
+              <Text style={styles.tokenCode} selectable>
+                {createdToken}
+              </Text>
+              <Text style={styles.tokenHint}>
+                The caregiver can enter this code after creating their account.
+              </Text>
+            </Card>
+
+            <View style={styles.successActions}>
+              <Button
+                title="Share Again"
+                variant="outline"
+                onPress={handleShareAgain}
+              />
+              <Button
+                title="Done"
+                onPress={() => router.back()}
               />
             </View>
           </View>
@@ -280,27 +417,28 @@ export default function InviteCaregiverScreen() {
 
   return (
     <ScreenLayout>
-      {/* Step indicator */}
-      <View style={styles.stepIndicator}>
-        {(['info', 'profiles', 'permissions', 'review'] as Step[]).map((s, i) => (
-          <View key={s} style={styles.stepDotRow}>
-            {i > 0 && (
+      {step !== 'success' && (
+        <View style={styles.stepIndicator}>
+          {(['info', 'profiles', 'permissions', 'review'] as Step[]).map((s, i) => (
+            <View key={s} style={styles.stepDotRow}>
+              {i > 0 && (
+                <View
+                  style={[
+                    styles.stepLine,
+                    getStepIndex(step) >= i && styles.stepLineActive,
+                  ]}
+                />
+              )}
               <View
                 style={[
-                  styles.stepLine,
-                  getStepIndex(step) >= i && styles.stepLineActive,
+                  styles.stepDot,
+                  getStepIndex(step) >= i && styles.stepDotActive,
                 ]}
               />
-            )}
-            <View
-              style={[
-                styles.stepDot,
-                getStepIndex(step) >= i && styles.stepDotActive,
-              ]}
-            />
-          </View>
-        ))}
-      </View>
+            </View>
+          ))}
+        </View>
+      )}
 
       {renderStep()}
     </ScreenLayout>
@@ -362,6 +500,36 @@ const styles = StyleSheet.create({
     gap: 12,
     marginTop: 24,
     marginBottom: 32,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    backgroundColor: COLORS.background.DEFAULT,
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 16,
+  },
+  toggleButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  toggleButtonActive: {
+    backgroundColor: COLORS.surface.DEFAULT,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  toggleText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.tertiary,
+  },
+  toggleTextActive: {
+    color: COLORS.text.DEFAULT,
+    fontWeight: FONT_WEIGHTS.semibold,
   },
   profileOption: {
     flexDirection: 'row',
@@ -499,5 +667,78 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 8,
     lineHeight: 18,
+  },
+  successContainer: {
+    alignItems: 'center',
+    paddingTop: 24,
+  },
+  successIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: COLORS.success?.light ?? '#E8F5E9',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  successIconText: {
+    fontSize: 28,
+    color: COLORS.success?.DEFAULT ?? '#4CAF50',
+    fontWeight: FONT_WEIGHTS.bold,
+  },
+  successTitle: {
+    fontSize: FONT_SIZES.xl,
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.text.DEFAULT,
+    marginBottom: 8,
+  },
+  successDescription: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    textAlign: 'center',
+    marginBottom: 24,
+    paddingHorizontal: 32,
+  },
+  tokenCard: {
+    width: '100%',
+    padding: 20,
+    marginBottom: 24,
+  },
+  tokenLabel: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.tertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  tokenValue: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.primary.DEFAULT,
+    marginBottom: 12,
+  },
+  tokenDivider: {
+    height: 1,
+    backgroundColor: COLORS.border.light,
+    marginBottom: 12,
+  },
+  tokenCode: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.text.DEFAULT,
+    letterSpacing: 1,
+    textAlign: 'center',
+    marginBottom: 8,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  tokenHint: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    textAlign: 'center',
+  },
+  successActions: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
   },
 });
