@@ -18,6 +18,12 @@ import { useTasks } from '@/hooks/useTasks';
 import { useAppointments } from '@/hooks/useAppointments';
 import { useTodaysDoses, useRefillStatus, useMedications } from '@/hooks/useMedications';
 import { useArtifacts } from '@/hooks/useArtifacts';
+import {
+  useBillingCases,
+  useBillingBriefing,
+  useBillingActiveCriticalCount,
+} from '@/hooks/useBilling';
+import type { BillingBriefingItem } from '@/services/billingBriefing';
 import { needsMedicationMigration, migrateMedicationFacts } from '@/services/medicationMigration';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
@@ -85,6 +91,9 @@ export default function HomeScreen() {
   const { data: allAppointments } = useAppointments(activeProfileId);
   const { data: todaysDoses } = useTodaysDoses(activeProfileId);
   const { data: artifacts } = useArtifacts(activeProfileId ?? undefined);
+  const { data: billingCases } = useBillingCases(activeProfileId);
+  const { data: billingBriefing } = useBillingBriefing(activeProfileId, 3);
+  const { data: billingCriticalCount } = useBillingActiveCriticalCount(activeProfileId);
 
   // Auto-migrate medication profile_facts → med_medications on first load
   const migrationRanRef = useRef<string | null>(null);
@@ -142,7 +151,15 @@ export default function HomeScreen() {
     );
     const attentionCount = needsCloseout.length;
 
-    const nothingDue = !hasMeds && !nextAppointment && tasksDueCount === 0 && overdueCount === 0 && attentionCount === 0;
+    const billingItems: BillingBriefingItem[] = billingBriefing ?? [];
+
+    const nothingDue =
+      !hasMeds &&
+      !nextAppointment &&
+      tasksDueCount === 0 &&
+      overdueCount === 0 &&
+      attentionCount === 0 &&
+      billingItems.length === 0;
 
     return {
       hasMeds,
@@ -152,9 +169,10 @@ export default function HomeScreen() {
       tasksDueCount,
       overdueCount,
       attentionCount,
+      billingItems,
       nothingDue,
     };
-  }, [todaysDoses, allAppointments, openTasks]);
+  }, [todaysDoses, allAppointments, openTasks, billingBriefing]);
 
   // Module stats
   const moduleStats = useMemo(() => {
@@ -164,14 +182,18 @@ export default function HomeScreen() {
       (a) => (a.status === 'scheduled' || a.status === 'preparing' || a.status === 'ready') && a.start_time >= nowIso,
     ).length;
     const docCount = (artifacts ?? []).length;
+    const activeBillingCount = (billingCases ?? []).filter(
+      (c) => c.status !== 'resolved' && c.status !== 'closed',
+    ).length;
 
     return {
       medications: medCount > 0 ? `${medCount} active` : 'None yet',
       appointments: upcomingApts > 0 ? `${upcomingApts} upcoming` : 'None yet',
+      billing: activeBillingCount > 0 ? `${activeBillingCount} active` : 'None yet',
       caregivers: 'Manage',
       documents: docCount > 0 ? `${docCount} saved` : 'None yet',
     };
-  }, [medications, allAppointments, artifacts]);
+  }, [medications, allAppointments, artifacts, billingCases]);
 
   const todayDateStr = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
@@ -320,6 +342,40 @@ export default function HomeScreen() {
                         </Text>
                       </View>
                     )}
+                    {briefing.billingItems.map((item) => {
+                      const isCritical = item.color === 'critical';
+                      const iconColor = isCritical
+                        ? COLORS.error.DEFAULT
+                        : item.color === 'warning'
+                        ? COLORS.accent.dark
+                        : COLORS.primary.DEFAULT;
+                      return (
+                        <TouchableOpacity
+                          key={item.key}
+                          style={styles.briefingLine}
+                          activeOpacity={0.7}
+                          onPress={(e) => {
+                            e.stopPropagation?.();
+                            router.push(`/(main)/billing/${item.caseId}`);
+                          }}
+                        >
+                          <Ionicons
+                            name={item.icon as keyof typeof Ionicons.glyphMap}
+                            size={18}
+                            color={iconColor}
+                          />
+                          <Text
+                            style={[
+                              styles.briefingLineText,
+                              isCritical && styles.briefingLineTextWarning,
+                            ]}
+                            numberOfLines={2}
+                          >
+                            {item.message}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
                 )}
 
@@ -363,20 +419,33 @@ export default function HomeScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.modulesContent}
             >
-              {MODULE_CARDS.map((mod) => (
-                <TouchableOpacity
-                  key={mod.key}
-                  style={styles.moduleCard}
-                  activeOpacity={0.7}
-                  onPress={() => router.push(mod.route as string)}
-                >
-                  <Ionicons name={mod.icon} size={22} color={COLORS.primary.DEFAULT} />
-                  <Text style={styles.moduleLabel}>{mod.label}</Text>
-                  <Text style={styles.moduleStat}>
-                    {moduleStats[mod.key as keyof typeof moduleStats]}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {MODULE_CARDS.map((mod) => {
+                const showBillingBadge =
+                  mod.key === 'billing' && (billingCriticalCount ?? 0) > 0;
+                return (
+                  <TouchableOpacity
+                    key={mod.key}
+                    style={styles.moduleCard}
+                    activeOpacity={0.7}
+                    onPress={() => router.push(mod.route as string)}
+                  >
+                    <View style={styles.moduleIconRow}>
+                      <Ionicons name={mod.icon} size={22} color={COLORS.primary.DEFAULT} />
+                      {showBillingBadge && (
+                        <View style={styles.moduleBadge}>
+                          <Text style={styles.moduleBadgeText}>
+                            {billingCriticalCount}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.moduleLabel}>{mod.label}</Text>
+                    <Text style={styles.moduleStat}>
+                      {moduleStats[mod.key as keyof typeof moduleStats]}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
           </View>
         </View>
@@ -612,6 +681,25 @@ const styles = StyleSheet.create({
     borderColor: COLORS.secondary.DEFAULT + '20',
     padding: 14,
     gap: 6,
+  },
+  moduleIconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  moduleBadge: {
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    backgroundColor: COLORS.error.DEFAULT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  moduleBadgeText: {
+    fontSize: 11,
+    color: '#FFFFFF',
+    fontWeight: FONT_WEIGHTS.bold,
   },
   moduleLabel: {
     fontSize: 14,

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/components/ui/Card';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useBillingCases } from '@/hooks/useBilling';
+import { formatRelativeTime } from '@/lib/utils/relativeTime';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { BillingCaseWithDocCount, BillingCaseStatus } from '@/lib/types/billing';
@@ -27,11 +28,18 @@ const STATUS_COLORS: Record<BillingCaseStatus, string> = {
   closed: COLORS.text.tertiary,
 };
 
+function isActive(status: BillingCaseStatus): boolean {
+  return status !== 'resolved' && status !== 'closed';
+}
+
+type FilterMode = 'active' | 'all';
+
 export default function BillingCasesScreen() {
   const router = useRouter();
   const { activeProfileId } = useActiveProfile();
-  const { data: cases, isLoading, refetch } = useBillingCases(activeProfileId);
+  const { data: cases, isLoading, refetch, error } = useBillingCases(activeProfileId);
   const [refreshing, setRefreshing] = useState(false);
+  const [filter, setFilter] = useState<FilterMode>('active');
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -39,19 +47,61 @@ export default function BillingCasesScreen() {
     setRefreshing(false);
   }, [refetch]);
 
-  const activeCases = (cases ?? []).filter((c) => c.status !== 'closed' && c.status !== 'resolved');
-  const closedCases = (cases ?? []).filter((c) => c.status === 'closed' || c.status === 'resolved');
-  const [showClosed, setShowClosed] = useState(false);
+  const { sorted, activeCount, resolvedCount } = useMemo(() => {
+    const list = cases ?? [];
+    const filtered = filter === 'active' ? list.filter((c) => isActive(c.status)) : list;
+    const sortedList = [...filtered].sort((a, b) => {
+      const aActive = isActive(a.status) ? 0 : 1;
+      const bActive = isActive(b.status) ? 0 : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      return b.last_activity_at.localeCompare(a.last_activity_at);
+    });
+    return {
+      sorted: sortedList,
+      activeCount: list.filter((c) => isActive(c.status)).length,
+      resolvedCount: list.filter((c) => !isActive(c.status)).length,
+    };
+  }, [cases, filter]);
 
   if (isLoading && !refreshing) {
     return (
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="chevron-back" size={22} color={COLORS.primary.DEFAULT} />
+            <Text style={styles.backText}>Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>Bills & EOBs</Text>
+        </View>
         <View style={styles.centered}>
           <Text style={styles.loadingText}>Loading billing cases...</Text>
         </View>
       </SafeAreaView>
     );
   }
+
+  if (error) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="chevron-back" size={22} color={COLORS.primary.DEFAULT} />
+            <Text style={styles.backText}>Back</Text>
+          </TouchableOpacity>
+          <Text style={styles.title}>Bills & EOBs</Text>
+        </View>
+        <View style={styles.centered}>
+          <Ionicons name="cloud-offline-outline" size={36} color={COLORS.text.tertiary} />
+          <Text style={styles.errorText}>Couldn't load your billing cases.</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
+            <Text style={styles.retryText}>Try again</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  const allEmpty = (cases ?? []).length === 0;
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
@@ -70,14 +120,31 @@ export default function BillingCasesScreen() {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="chevron-back" size={22} color={COLORS.primary.DEFAULT} />
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
           <Text style={styles.title}>Bills & EOBs</Text>
         </View>
 
-        {/* Active Cases */}
+        {/* Filter toggle */}
+        {!allEmpty && (
+          <View style={styles.filterRow}>
+            <FilterChip
+              label={`Active${activeCount > 0 ? ` (${activeCount})` : ''}`}
+              selected={filter === 'active'}
+              onPress={() => setFilter('active')}
+            />
+            <FilterChip
+              label={`All${(cases ?? []).length > 0 ? ` (${(cases ?? []).length})` : ''}`}
+              selected={filter === 'all'}
+              onPress={() => setFilter('all')}
+            />
+          </View>
+        )}
+
+        {/* Content */}
         <View style={styles.section}>
-          {activeCases.length === 0 && closedCases.length === 0 ? (
+          {allEmpty ? (
             <Card>
               <View style={styles.emptyContainer}>
                 <Ionicons
@@ -99,43 +166,33 @@ export default function BillingCasesScreen() {
                 </TouchableOpacity>
               </View>
             </Card>
-          ) : (
-            <>
-              {activeCases.length > 0 && (
-                <Text style={styles.sectionTitle}>Active Cases</Text>
-              )}
-              {activeCases.map((billingCase) => (
-                <CaseCard
-                  key={billingCase.id}
-                  billingCase={billingCase}
-                  onPress={() => router.push(`/(main)/billing/${billingCase.id}`)}
+          ) : sorted.length === 0 ? (
+            <Card>
+              <View style={styles.emptyContainer}>
+                <Ionicons
+                  name="checkmark-done-circle-outline"
+                  size={40}
+                  color={COLORS.success.DEFAULT}
+                  style={styles.emptyIcon}
                 />
-              ))}
-            </>
+                <Text style={styles.emptyText}>No active cases</Text>
+                <Text style={styles.emptySubtext}>
+                  {resolvedCount > 0
+                    ? `You have ${resolvedCount} resolved case${resolvedCount === 1 ? '' : 's'}. Switch to "All" to see them.`
+                    : 'Tap + below to start a new bill or EOB.'}
+                </Text>
+              </View>
+            </Card>
+          ) : (
+            sorted.map((billingCase) => (
+              <CaseCard
+                key={billingCase.id}
+                billingCase={billingCase}
+                onPress={() => router.push(`/(main)/billing/${billingCase.id}`)}
+              />
+            ))
           )}
         </View>
-
-        {/* Closed Cases */}
-        {closedCases.length > 0 && (
-          <View style={styles.section}>
-            <TouchableOpacity
-              onPress={() => setShowClosed(!showClosed)}
-              style={styles.toggleRow}
-            >
-              <Text style={styles.toggleText}>
-                {showClosed ? 'Hide' : 'Show'} resolved/closed ({closedCases.length})
-              </Text>
-            </TouchableOpacity>
-            {showClosed &&
-              closedCases.map((billingCase) => (
-                <CaseCard
-                  key={billingCase.id}
-                  billingCase={billingCase}
-                  onPress={() => router.push(`/(main)/billing/${billingCase.id}`)}
-                />
-              ))}
-          </View>
-        )}
       </ScrollView>
 
       {/* FAB */}
@@ -152,6 +209,28 @@ export default function BillingCasesScreen() {
 
 // ── Sub-components ──────────────────────────────────────────────────────────
 
+function FilterChip({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={[styles.filterChip, selected && styles.filterChipSelected]}
+    >
+      <Text style={[styles.filterChipText, selected && styles.filterChipTextSelected]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
 function CaseCard({
   billingCase,
   onPress,
@@ -160,6 +239,7 @@ function CaseCard({
   onPress: () => void;
 }) {
   const statusColor = STATUS_COLORS[billingCase.status];
+  const dimmed = !isActive(billingCase.status);
 
   const serviceDates = billingCase.service_date_start
     ? billingCase.service_date_end && billingCase.service_date_end !== billingCase.service_date_start
@@ -173,29 +253,47 @@ function CaseCard({
     serviceDates,
   ].filter(Boolean);
 
+  const hasTotals = billingCase.total_patient_responsibility != null;
+  const paymentLine = !hasTotals
+    ? billingCase.total_paid > 0
+      ? `Paid $${billingCase.total_paid.toFixed(2)}`
+      : 'No payments yet'
+    : billingCase.total_paid > 0
+    ? `Paid $${billingCase.total_paid.toFixed(2)} of $${billingCase.total_patient_responsibility!.toFixed(2)}`
+    : `$${billingCase.total_patient_responsibility!.toFixed(2)} owed`;
+
   return (
-    <Card style={styles.caseCard} onPress={onPress}>
+    <Card style={dimmed ? { ...styles.caseCard, ...styles.caseCardDimmed } : styles.caseCard} onPress={onPress}>
       <View style={styles.caseRow}>
         <View style={styles.caseInfo}>
-          <Text style={styles.caseTitle} numberOfLines={2}>
-            {billingCase.title}
-          </Text>
+          <View style={styles.caseTitleRow}>
+            <Text style={styles.caseTitle} numberOfLines={2}>
+              {billingCase.title}
+            </Text>
+            {billingCase.unresolved_findings_count > 0 && (
+              <View style={styles.findingsBadge}>
+                <Ionicons name="warning" size={11} color="#FFFFFF" />
+                <Text style={styles.findingsBadgeText}>
+                  {billingCase.unresolved_findings_count}
+                </Text>
+              </View>
+            )}
+          </View>
           {details.length > 0 && (
             <Text style={styles.caseDetail} numberOfLines={1}>
               {details.join(' · ')}
             </Text>
           )}
           <View style={styles.caseMeta}>
-            {billingCase.total_patient_responsibility != null && (
-              <Text style={styles.caseAmount}>
-                ${billingCase.total_patient_responsibility.toFixed(2)}
-              </Text>
-            )}
+            <Text style={styles.caseAmount}>{paymentLine}</Text>
             <Text style={styles.caseDocCount}>
               <Ionicons name="document-text-outline" size={12} color={COLORS.text.tertiary} />
               {' '}{billingCase.document_count} doc{billingCase.document_count !== 1 ? 's' : ''}
             </Text>
           </View>
+          <Text style={styles.caseUpdated}>
+            Last updated {formatRelativeTime(billingCase.last_activity_at)}
+          </Text>
         </View>
         <View style={[styles.statusPill, { backgroundColor: statusColor + '20' }]}>
           <Text style={[styles.statusPillText, { color: statusColor }]}>
@@ -225,10 +323,29 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 24,
+    gap: 10,
   },
   loadingText: {
     fontSize: FONT_SIZES.base,
     color: COLORS.text.secondary,
+  },
+  errorText: {
+    fontSize: FONT_SIZES.base,
+    color: COLORS.text.secondary,
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+  },
+  retryText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.primary.DEFAULT,
+    fontWeight: FONT_WEIGHTS.semibold,
   },
   header: {
     paddingHorizontal: 24,
@@ -236,7 +353,11 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
     marginBottom: 8,
+    marginLeft: -4,
   },
   backText: {
     fontSize: FONT_SIZES.base,
@@ -248,24 +369,39 @@ const styles = StyleSheet.create({
     fontWeight: FONT_WEIGHTS.bold,
     color: COLORS.text.DEFAULT,
   },
+
+  // Filter
+  filterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 24,
+    marginTop: 12,
+  },
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: COLORS.surface.muted,
+    borderWidth: 1,
+    borderColor: COLORS.border.DEFAULT,
+  },
+  filterChipSelected: {
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    borderColor: COLORS.primary.DEFAULT,
+  },
+  filterChipText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    fontWeight: FONT_WEIGHTS.medium,
+  },
+  filterChipTextSelected: {
+    color: COLORS.primary.DEFAULT,
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
+
   section: {
     paddingHorizontal: 24,
-    marginTop: 24,
-  },
-  sectionTitle: {
-    fontSize: FONT_SIZES.lg,
-    fontWeight: FONT_WEIGHTS.semibold,
-    color: COLORS.text.DEFAULT,
-    marginBottom: 12,
-  },
-  toggleRow: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  toggleText: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.primary.DEFAULT,
-    fontWeight: FONT_WEIGHTS.medium,
+    marginTop: 16,
   },
 
   // Empty state
@@ -305,16 +441,37 @@ const styles = StyleSheet.create({
 
   // Case card
   caseCard: { marginBottom: 8 },
+  caseCardDimmed: { opacity: 0.65 },
   caseRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
   },
   caseInfo: { flex: 1, marginRight: 12 },
+  caseTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   caseTitle: {
     fontSize: FONT_SIZES.base,
     fontWeight: FONT_WEIGHTS.semibold,
     color: COLORS.text.DEFAULT,
+    flexShrink: 1,
+  },
+  findingsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: COLORS.error.DEFAULT,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  findingsBadgeText: {
+    fontSize: 11,
+    color: '#FFFFFF',
+    fontWeight: FONT_WEIGHTS.bold,
   },
   caseDetail: {
     fontSize: FONT_SIZES.sm,
@@ -326,6 +483,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 6,
     gap: 12,
+    flexWrap: 'wrap',
   },
   caseAmount: {
     fontSize: FONT_SIZES.sm,
@@ -335,6 +493,11 @@ const styles = StyleSheet.create({
   caseDocCount: {
     fontSize: FONT_SIZES.xs,
     color: COLORS.text.tertiary,
+  },
+  caseUpdated: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    marginTop: 4,
   },
   statusPill: {
     paddingHorizontal: 10,

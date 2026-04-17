@@ -10,6 +10,7 @@ import { useTasks, useUpdateTaskStatus } from '@/hooks/useTasks';
 import { useAppointments } from '@/hooks/useAppointments';
 import { useTodaysDoses, useLogAdherence } from '@/hooks/useMedications';
 import { useProfileGaps } from '@/hooks/useProfileGaps';
+import { useBillingBriefing } from '@/hooks/useBilling';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { Task } from '@/lib/types/tasks';
@@ -70,6 +71,7 @@ export default function TodayDetailScreen() {
   const { data: allAppointments } = useAppointments(activeProfileId);
   const { data: todaysDoses } = useTodaysDoses(activeProfileId);
   const { data: gaps } = useProfileGaps(activeProfileId ?? undefined);
+  const { data: billingBriefing } = useBillingBriefing(activeProfileId, 5);
   const updateStatus = useUpdateTaskStatus();
   const logAdherence = useLogAdherence();
 
@@ -294,7 +296,7 @@ export default function TodayDetailScreen() {
       )}
 
       {/* NEEDS ATTENTION */}
-      {(needsCloseout.length > 0 || highGaps.length > 0) && (
+      {(needsCloseout.length > 0 || highGaps.length > 0 || (billingBriefing ?? []).length > 0) && (
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
             <Ionicons name="notifications" size={18} color={COLORS.accent.dark} />
@@ -345,6 +347,35 @@ export default function TodayDetailScreen() {
               </View>
             </Card>
           ))}
+
+          {/* Billing briefing items */}
+          {(billingBriefing ?? []).map((item) => {
+            const iconColor =
+              item.color === 'critical'
+                ? COLORS.error.DEFAULT
+                : item.color === 'warning'
+                ? COLORS.accent.dark
+                : COLORS.primary.DEFAULT;
+            return (
+              <Card
+                key={item.key}
+                style={styles.itemCard}
+                onPress={() => router.push(`/(main)/billing/${item.caseId}`)}
+              >
+                <View style={styles.itemRow}>
+                  <Ionicons
+                    name={item.icon as keyof typeof Ionicons.glyphMap}
+                    size={20}
+                    color={iconColor}
+                  />
+                  <View style={[styles.itemContent, { marginLeft: 10 }]}>
+                    <Text style={styles.itemTitle} numberOfLines={2}>{item.message}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={COLORS.text.tertiary} />
+                </View>
+              </Card>
+            );
+          })}
         </View>
       )}
 
@@ -353,7 +384,8 @@ export default function TodayDetailScreen() {
         scheduledDoses.length === 0 &&
         todayAppointments.length === 0 &&
         needsCloseout.length === 0 &&
-        highGaps.length === 0 && (
+        highGaps.length === 0 &&
+        (billingBriefing ?? []).length === 0 && (
           <View style={styles.allClear}>
             <Ionicons name="checkmark-circle" size={48} color={COLORS.success.DEFAULT} />
             <Text style={styles.allClearTitle}>All caught up!</Text>

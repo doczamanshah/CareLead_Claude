@@ -14,6 +14,8 @@ export default function BillingLayout() {
       <Stack.Screen name="start" />
       <Stack.Screen name="[id]/index" />
       <Stack.Screen name="[id]/add-document" />
+      <Stack.Screen name="[id]/call-helper" />
+      <Stack.Screen name="[id]/appeals" />
     </Stack>
   );
 }
