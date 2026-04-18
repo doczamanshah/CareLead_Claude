@@ -1161,11 +1161,43 @@ When building a new module, follow this exact sequence:
   - Items with cadence auto-calculate `next_due_date` on completion
   - `deferred` / `declined` are user choices the engine respects (never overrides)
 
+#### Step 4: Voice Retrieval / Ask Profile Module — COMPLETE (all 6 steps)
+- No new database tables (reads from existing domain tables)
+- **Edge Function**: `ask-profile` (AI fallback for unmatched queries)
+- **Key files**:
+  - `lib/types/ask.ts` — CanonicalFact, ProfileIndex, AnswerCard, AskResponse, TableCard, TrendChartCard, ComparisonTableCard, SummaryListCard, TimelineCard, all visualization types
+  - `services/profileIndex.ts` — builds ProfileIndex by aggregating across all domain tables (meds, labs, results, allergies, conditions, appointments, insurance, care team, preventive, billing)
+  - `services/askIntents.ts` — 17+ deterministic intent definitions covering all domains
+  - `services/askRouter.ts` — intent classification with keyword matching, entity extraction, confidence scoring
+  - `services/askEngine.ts` — deterministic retrieval engine with smart format selection (table, trend chart, comparison, summary list, timeline, single card)
+  - `services/askFallback.ts` — Claude AI fallback for unmatched queries
+  - `services/askOrchestrator.ts` — top-level orchestrator: route → deterministic or AI → response
+  - `services/askVerify.ts` — fact verification and conflict resolution across all source types
+  - `lib/utils/formatLabValue.ts` — prevents duplicate unit display
+  - `components/AnswerCard.tsx` — trust UI with provenance, freshness, verify/resolve actions
+  - `components/SummaryListCard.tsx` — compact list card for medications, allergies, conditions, care team
+  - `components/LabTableCard.tsx` — lab panel table with flag colors
+  - `components/TrendChartCard.tsx` — SVG line chart with reference range band
+  - `components/ComparisonTableCard.tsx` — multi-date panel comparison
+  - `components/TimelineCard.tsx` — upcoming/past timeline for appointments
+  - `components/ConflictResolution.tsx` — conflict resolution modal
+  - `hooks/useAsk.ts` — useProfileIndex, useAskProfile, useVerifyFact, useResolveConflict
+  - Screens: `app/(main)/ask/` — index (Ask screen with conversation UI, dynamic chips, voice input, visualizations)
+- **Patterns established**:
+  - Deterministic-first retrieval: intent router → template queries → AI fallback only when needed
+  - Smart format selection: engine auto-picks table/chart/list/card based on query + data shape
+  - Provenance on every answer: source, freshness, verification status always visible
+  - Conflict detection and resolution with audit trail
+  - Voice input via iOS keyboard dictation (Expo Go compatible)
+  - Global access: FAB on Home, Ask buttons on module headers, profile Ask button
+  - Dynamic personalized quick-ask chips based on profile data
+  - Cross-domain querying: single Ask interface searches across all CareLead modules
+
 ### Phase 2: Remaining Candidates
 - [x] Bills & EOBs module — COMPLETE
 - [x] Results (labs/imaging) — COMPLETE
 - [x] Preventive Care — COMPLETE
-- [ ] Voice Retrieval ("Ask Profile") — NEXT
+- [x] Voice Retrieval ("Ask Profile") — COMPLETE
 - [ ] Calling Agent — PLANNED
 - [ ] During-Visit Capture — PLANNED
 - [ ] Analytics & Dashboards — PLANNED
