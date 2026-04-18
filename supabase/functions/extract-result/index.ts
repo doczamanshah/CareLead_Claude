@@ -41,7 +41,11 @@ Return ONLY valid JSON with this exact structure:
   "notes": string or null (any additional relevant text not captured in analytes)
 }
 
-Extract ONLY what is explicitly present. Do not infer or calculate flags unless explicitly stated in the report. Set fields to null if not found. Return valid JSON only, no markdown, no explanation.`;
+Extract ONLY what is explicitly present. Do not infer or calculate flags unless explicitly stated in the report. Set fields to null if not found.
+
+IMPORTANT: If the value includes a unit (e.g., "8.5%", "130 mg/dL", "7.2 g/dL"), separate them: "value" should be just the number ("8.5", "130", "7.2") and "unit" should be the unit alone ("%", "mg/dL", "g/dL"). Do NOT include the unit in the "value" field. Exception: for non-numeric qualitative results like "Negative", "Positive", or ">10.0", keep the full token in "value" and set "unit" to null.
+
+Return valid JSON only, no markdown, no explanation.`;
 
 const IMAGING_EXTRACTION_PROMPT = `You are a medical imaging report extraction assistant. Extract structured data from this imaging/radiology report. You are extracting what the report says, NOT interpreting results or giving medical advice.
 

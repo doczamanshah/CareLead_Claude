@@ -187,7 +187,11 @@ export default function ResultsListScreen() {
   if (isLoading && !refreshing) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top']}>
-        <HeaderRow onBack={() => router.back()} onAdd={() => router.push('/(main)/results/add')} />
+        <HeaderRow
+        onBack={() => router.back()}
+        onAdd={() => router.push('/(main)/results/add')}
+        onAsk={() => router.push({ pathname: '/(main)/ask', params: { domain: 'results' } })}
+      />
         <View style={styles.centered}>
           <Text style={styles.loadingText}>Loading results...</Text>
         </View>
@@ -198,7 +202,11 @@ export default function ResultsListScreen() {
   if (error) {
     return (
       <SafeAreaView style={styles.safeArea} edges={['top']}>
-        <HeaderRow onBack={() => router.back()} onAdd={() => router.push('/(main)/results/add')} />
+        <HeaderRow
+        onBack={() => router.back()}
+        onAdd={() => router.push('/(main)/results/add')}
+        onAsk={() => router.push({ pathname: '/(main)/ask', params: { domain: 'results' } })}
+      />
         <View style={styles.centered}>
           <Ionicons name="cloud-offline-outline" size={36} color={COLORS.text.tertiary} />
           <Text style={styles.errorText}>Couldn't load your results.</Text>
@@ -216,7 +224,11 @@ export default function ResultsListScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <HeaderRow onBack={() => router.back()} onAdd={() => router.push('/(main)/results/add')} />
+      <HeaderRow
+        onBack={() => router.back()}
+        onAdd={() => router.push('/(main)/results/add')}
+        onAsk={() => router.push({ pathname: '/(main)/ask', params: { domain: 'results' } })}
+      />
 
       {allEmpty ? (
         <ScrollView
@@ -320,7 +332,15 @@ export default function ResultsListScreen() {
 
 // ── Header / Filters ────────────────────────────────────────────────────────
 
-function HeaderRow({ onBack, onAdd }: { onBack: () => void; onAdd: () => void }) {
+function HeaderRow({
+  onBack,
+  onAdd,
+  onAsk,
+}: {
+  onBack: () => void;
+  onAdd: () => void;
+  onAsk: () => void;
+}) {
   return (
     <View style={styles.header}>
       <TouchableOpacity onPress={onBack} style={styles.backButton}>
@@ -329,9 +349,24 @@ function HeaderRow({ onBack, onAdd }: { onBack: () => void; onAdd: () => void })
       </TouchableOpacity>
       <View style={styles.headerRow}>
         <Text style={styles.title}>Results</Text>
-        <TouchableOpacity onPress={onAdd} style={styles.addButton} activeOpacity={0.7}>
-          <Ionicons name="add" size={24} color={COLORS.text.inverse} />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            onPress={onAsk}
+            style={styles.askButton}
+            activeOpacity={0.7}
+            accessibilityLabel="Ask CareLead about results"
+          >
+            <Ionicons
+              name="chatbubble-ellipses-outline"
+              size={18}
+              color={COLORS.primary.DEFAULT}
+            />
+            <Text style={styles.askButtonText}>Ask</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onAdd} style={styles.addButton} activeOpacity={0.7}>
+            <Ionicons name="add" size={24} color={COLORS.text.inverse} />
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
@@ -715,6 +750,25 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary.DEFAULT,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  askButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+  },
+  askButtonText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
   },
 
   // Search + Sort

@@ -21,6 +21,7 @@ import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useCreateMedication } from '@/hooks/useMedications';
 import { useCreateNoteArtifact } from '@/hooks/useArtifacts';
 import { useTriggerExtraction } from '@/hooks/useIntentSheet';
+import { checkForDuplicateMedication } from '@/services/medications';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { MedicationForm, MedicationRoute, MedicationFrequency } from '@/lib/types/medications';
@@ -288,8 +289,8 @@ export default function CreateMedicationScreen() {
     }
   }
 
-  function handleSave() {
-    if (!activeProfileId || !canSave) return;
+  function persistMedication() {
+    if (!activeProfileId) return;
 
     const isPrn = fields.frequency === 'as_needed';
 
@@ -318,6 +319,36 @@ export default function CreateMedicationScreen() {
         onSuccess: () => router.back(),
       },
     );
+  }
+
+  async function handleSave() {
+    if (!activeProfileId || !canSave) return;
+
+    const name = fields.drug_name.trim();
+    const dupCheck = await checkForDuplicateMedication(activeProfileId, name);
+
+    if (dupCheck.success && dupCheck.data.isDuplicate && dupCheck.data.existingMed) {
+      const existing = dupCheck.data.existingMed;
+      Alert.alert(
+        'Similar medication found',
+        `You already have ${existing.name} (${existing.dose}) in your medication list. Do you want to:`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Update existing',
+            onPress: () => router.replace(`/(main)/medications/${existing.id}` as never),
+          },
+          {
+            text: 'Add anyway',
+            style: 'destructive',
+            onPress: () => persistMedication(),
+          },
+        ],
+      );
+      return;
+    }
+
+    persistMedication();
   }
 
   // ── STEP 1: Free text input ──────────────────────────────────────────────

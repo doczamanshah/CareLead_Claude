@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { DatePicker } from '@/components/ui/DatePicker';
@@ -90,7 +91,8 @@ export default function AddTypedResultScreen() {
       >
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Text style={styles.backText}>Cancel</Text>
+            <Ionicons name="chevron-back" size={18} color={COLORS.primary.DEFAULT} />
+            <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
           <Text style={styles.title}>Type or Paste Result</Text>
         </View>
@@ -189,7 +191,12 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 8,
   },
-  backButton: { marginBottom: 8 },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    alignSelf: 'flex-start',
+  },
   backText: {
     fontSize: FONT_SIZES.base,
     color: COLORS.primary.DEFAULT,

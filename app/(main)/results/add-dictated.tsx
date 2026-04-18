@@ -82,7 +82,8 @@ export default function AddDictatedResultScreen() {
       >
         <View style={styles.header}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-            <Text style={styles.backText}>Cancel</Text>
+            <Ionicons name="chevron-back" size={18} color={COLORS.primary.DEFAULT} />
+            <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
           <Text style={styles.title}>Dictate Result</Text>
           <Text style={styles.subtitle}>
@@ -166,7 +167,12 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 8,
   },
-  backButton: { marginBottom: 8 },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    alignSelf: 'flex-start',
+  },
   backText: {
     fontSize: FONT_SIZES.base,
     color: COLORS.primary.DEFAULT,

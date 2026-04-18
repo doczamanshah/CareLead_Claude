@@ -186,6 +186,7 @@ export default function PreventiveCareScreen() {
         <Header
           onBack={() => router.back()}
           onScan={handleManualScan}
+          onAsk={() => router.push({ pathname: '/(main)/ask', params: { domain: 'preventive' } })}
           scanDisabled={true}
           scanning={false}
         />
@@ -202,6 +203,7 @@ export default function PreventiveCareScreen() {
         <Header
           onBack={() => router.back()}
           onScan={handleManualScan}
+          onAsk={() => router.push({ pathname: '/(main)/ask', params: { domain: 'preventive' } })}
           scanDisabled={true}
           scanning={false}
         />
@@ -233,6 +235,7 @@ export default function PreventiveCareScreen() {
         <Header
           onBack={() => router.back()}
           onScan={handleManualScan}
+          onAsk={() => router.push({ pathname: '/(main)/ask', params: { domain: 'preventive' } })}
           scanDisabled={isScanning}
           scanning={isScanning}
         />
@@ -385,11 +388,13 @@ export default function PreventiveCareScreen() {
 function Header({
   onBack,
   onScan,
+  onAsk,
   scanDisabled,
   scanning,
 }: {
   onBack: () => void;
   onScan: () => void;
+  onAsk: () => void;
   scanDisabled: boolean;
   scanning: boolean;
 }) {
@@ -401,19 +406,34 @@ function Header({
       </TouchableOpacity>
       <View style={styles.headerRow}>
         <Text style={styles.title}>Preventive Care</Text>
-        <TouchableOpacity
-          onPress={onScan}
-          disabled={scanDisabled}
-          style={[styles.scanButton, scanDisabled && styles.scanButtonDisabled]}
-          activeOpacity={0.7}
-          accessibilityLabel="Run eligibility scan"
-        >
-          {scanning ? (
-            <ActivityIndicator size="small" color={COLORS.primary.DEFAULT} />
-          ) : (
-            <Ionicons name="refresh-outline" size={20} color={COLORS.primary.DEFAULT} />
-          )}
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            onPress={onAsk}
+            style={styles.askButton}
+            activeOpacity={0.7}
+            accessibilityLabel="Ask CareLead about preventive care"
+          >
+            <Ionicons
+              name="chatbubble-ellipses-outline"
+              size={18}
+              color={COLORS.primary.DEFAULT}
+            />
+            <Text style={styles.askButtonText}>Ask</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={onScan}
+            disabled={scanDisabled}
+            style={[styles.scanButton, scanDisabled && styles.scanButtonDisabled]}
+            activeOpacity={0.7}
+            accessibilityLabel="Run eligibility scan"
+          >
+            {scanning ? (
+              <ActivityIndicator size="small" color={COLORS.primary.DEFAULT} />
+            ) : (
+              <Ionicons name="refresh-outline" size={20} color={COLORS.primary.DEFAULT} />
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
@@ -703,6 +723,25 @@ const styles = StyleSheet.create({
   },
   scanButtonDisabled: {
     opacity: 0.5,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  askButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+  },
+  askButtonText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
   },
 
   // Initial scan indicator

@@ -39,6 +39,7 @@ import {
 } from '@/services/resultExport';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { formatLabValue } from '@/lib/utils/formatLabValue';
 import type {
   ResultDocument,
   ResultItem,
@@ -1178,8 +1179,7 @@ function LabObservationRow({
       </View>
       <View style={styles.labRowRight}>
         <Text style={styles.labValue}>
-          {valueDisplay}
-          {obs.unit ? ` ${obs.unit}` : ''}
+          {formatLabValue(valueDisplay, obs.unit)}
         </Text>
         {flag && flagColor && flagIcon && flagLabel && (
           <View

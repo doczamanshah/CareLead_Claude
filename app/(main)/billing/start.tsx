@@ -80,14 +80,10 @@ export default function StartBillingCaseScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <View style={styles.header}>
-          <View style={styles.headerRow}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <Ionicons name="chevron-back" size={22} color={COLORS.primary.DEFAULT} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.back()}>
-              <Text style={styles.cancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="chevron-back" size={18} color={COLORS.primary.DEFAULT} />
+            <Text style={styles.backText}>Back</Text>
+          </TouchableOpacity>
           <Text style={styles.title}>Start a New Bill</Text>
         </View>
 
@@ -150,16 +146,13 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 16,
   },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
   backButton: {
-    padding: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    alignSelf: 'flex-start',
   },
-  cancelText: {
+  backText: {
     fontSize: FONT_SIZES.base,
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.medium,

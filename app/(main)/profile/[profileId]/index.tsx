@@ -1,5 +1,6 @@
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
 import { useProfileDetail } from '@/hooks/useProfileDetail';
@@ -88,6 +89,24 @@ export default function ProfileOverviewScreen() {
           <Text style={styles.editButtonText}>Edit</Text>
         </TouchableOpacity>
       </View>
+
+      <TouchableOpacity
+        style={styles.askProfileButton}
+        activeOpacity={0.8}
+        onPress={() => router.push('/(main)/ask')}
+      >
+        <Ionicons
+          name="chatbubble-ellipses"
+          size={18}
+          color={COLORS.primary.DEFAULT}
+        />
+        <Text style={styles.askProfileText}>Ask about this profile</Text>
+        <Ionicons
+          name="chevron-forward"
+          size={16}
+          color={COLORS.primary.DEFAULT}
+        />
+      </TouchableOpacity>
 
       {/* Category Sections */}
       {PROFILE_FACT_CATEGORIES.map((category) => {
@@ -306,6 +325,24 @@ const styles = StyleSheet.create({
     color: COLORS.primary.DEFAULT,
     fontSize: FONT_SIZES.sm,
     fontWeight: FONT_WEIGHTS.semibold,
+  },
+  askProfileButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '20',
+    marginBottom: 16,
+  },
+  askProfileText: {
+    flex: 1,
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
   },
   section: {
     marginBottom: 20,

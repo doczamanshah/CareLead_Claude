@@ -131,6 +131,72 @@ export async function fetchMedicationDetail(
 }
 
 /**
+ * Normalize a drug name for duplicate detection. Strips common form suffixes
+ * (tablet/capsule/etc.), pulls out the first word, and lowercases. The goal is
+ * to catch accidental duplicates — e.g. "Lisinopril 10mg" vs "lisinopril" —
+ * without being overly aggressive on genuinely-distinct prescriptions.
+ */
+function normalizeDrugName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/\b(tablet|tablets|capsule|capsules|pill|pills|cap|caps|tab|tabs)\b/g, '')
+    .replace(/[^a-z0-9\s\-]/g, ' ')
+    .trim()
+    .split(/\s+/)[0] ?? '';
+}
+
+export interface DuplicateMedicationMatch {
+  id: string;
+  name: string;
+  dose: string;
+}
+
+/**
+ * Check whether an active medication matching the given name already exists
+ * for this profile. Matches on the normalized first token of the drug name.
+ */
+export async function checkForDuplicateMedication(
+  profileId: string,
+  medicationName: string,
+): Promise<
+  ServiceResult<{ isDuplicate: boolean; existingMed: DuplicateMedicationMatch | null }>
+> {
+  const normalized = normalizeDrugName(medicationName);
+  if (!normalized) {
+    return { success: true, data: { isDuplicate: false, existingMed: null } };
+  }
+
+  const medsResult = await fetchMedications(profileId);
+  if (!medsResult.success) {
+    return medsResult;
+  }
+
+  const match = medsResult.data.find(
+    (m) => m.status === 'active' && normalizeDrugName(m.drug_name) === normalized,
+  );
+
+  if (!match) {
+    return { success: true, data: { isDuplicate: false, existingMed: null } };
+  }
+
+  const dose = [match.strength, match.sig?.frequency_text]
+    .filter(Boolean)
+    .join(' — ');
+
+  return {
+    success: true,
+    data: {
+      isDuplicate: true,
+      existingMed: {
+        id: match.id,
+        name: match.drug_name,
+        dose: dose || 'no dose on file',
+      },
+    },
+  };
+}
+
+/**
  * Create a medication with sig and optional supply atomically.
  */
 export async function createMedication(

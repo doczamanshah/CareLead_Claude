@@ -76,6 +76,7 @@ const QUICK_ACTIONS = [
 ];
 
 const MODULE_CARDS = [
+  { key: 'ask', icon: 'chatbubble-ellipses-outline' as const, label: 'Ask', route: '/(main)/ask' },
   { key: 'medications', icon: 'medkit' as const, label: 'Meds', route: '/(main)/medications' },
   { key: 'appointments', icon: 'calendar' as const, label: 'Appts', route: '/(main)/appointments' },
   { key: 'results', icon: 'flask-outline' as const, label: 'Results', route: '/(main)/results' },
@@ -175,6 +176,15 @@ export default function HomeScreen() {
       resultsItems.length === 0 &&
       preventiveItems.length === 0;
 
+    const briefingLineCount =
+      (hasMeds ? 1 : 0) +
+      (nextAppointment ? 1 : 0) +
+      (tasksDueCount > 0 || overdueCount > 0 ? 1 : 0) +
+      (attentionCount > 0 ? 1 : 0) +
+      billingItems.length +
+      resultsItems.length +
+      preventiveItems.length;
+
     return {
       hasMeds,
       medTotal: scheduled.length,
@@ -187,6 +197,7 @@ export default function HomeScreen() {
       resultsItems,
       preventiveItems,
       nothingDue,
+      briefingLineCount,
     };
   }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing, preventiveBriefing]);
 
@@ -208,6 +219,7 @@ export default function HomeScreen() {
     const preventiveHasItems = (preventiveItems ?? []).length > 0;
 
     return {
+      ask: 'Ask about your health profile',
       medications: medCount > 0 ? `${medCount} active` : 'None yet',
       appointments: upcomingApts > 0 ? `${upcomingApts} upcoming` : 'None yet',
       results: resultsCount > 0 ? `${resultsCount} saved` : 'None yet',
@@ -330,12 +342,31 @@ export default function HomeScreen() {
                 </View>
 
                 {briefing.nothingDue ? (
-                  <View style={styles.briefingAllClear}>
-                    <Ionicons name="checkmark-circle" size={24} color={COLORS.success.DEFAULT} />
-                    <Text style={styles.briefingAllClearText}>
-                      All caught up — nothing due today
-                    </Text>
-                  </View>
+                  <>
+                    <View style={styles.briefingAllClear}>
+                      <Ionicons name="checkmark-circle" size={24} color={COLORS.success.DEFAULT} />
+                      <Text style={styles.briefingAllClearText}>
+                        All caught up — nothing due today
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.briefingAskPrompt}
+                      activeOpacity={0.7}
+                      onPress={(e) => {
+                        e.stopPropagation?.();
+                        router.push('/(main)/ask');
+                      }}
+                    >
+                      <Ionicons
+                        name="chatbubble-ellipses-outline"
+                        size={16}
+                        color={COLORS.primary.DEFAULT}
+                      />
+                      <Text style={styles.briefingAskPromptText}>
+                        Need something? Ask CareLead anything about your profile.
+                      </Text>
+                    </TouchableOpacity>
+                  </>
                 ) : (
                   <View style={styles.briefingLines}>
                     {briefing.hasMeds && (
@@ -493,6 +524,25 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                       );
                     })}
+                    {briefing.briefingLineCount < 3 && (
+                      <TouchableOpacity
+                        style={styles.briefingAskPrompt}
+                        activeOpacity={0.7}
+                        onPress={(e) => {
+                          e.stopPropagation?.();
+                          router.push('/(main)/ask');
+                        }}
+                      >
+                        <Ionicons
+                          name="chatbubble-ellipses-outline"
+                          size={16}
+                          color={COLORS.primary.DEFAULT}
+                        />
+                        <Text style={styles.briefingAskPromptText}>
+                          Need something? Ask CareLead anything about your profile.
+                        </Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 )}
 
@@ -568,7 +618,10 @@ export default function HomeScreen() {
                       )}
                     </View>
                     <Text style={styles.moduleLabel}>{mod.label}</Text>
-                    <Text style={[styles.moduleStat, { color: statColor }]}>
+                    <Text
+                      style={[styles.moduleStat, { color: statColor }]}
+                      numberOfLines={2}
+                    >
                       {moduleStats[mod.key as keyof typeof moduleStats]}
                     </Text>
                   </TouchableOpacity>
@@ -578,6 +631,16 @@ export default function HomeScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {/* Floating Ask FAB */}
+      <TouchableOpacity
+        style={styles.askFab}
+        activeOpacity={0.85}
+        onPress={() => router.push('/(main)/ask')}
+        accessibilityLabel="Ask CareLead"
+      >
+        <Ionicons name="chatbubble-ellipses" size={26} color="#FFFFFF" />
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -750,6 +813,24 @@ const styles = StyleSheet.create({
     color: COLORS.error.DEFAULT,
     fontWeight: FONT_WEIGHTS.medium,
   },
+  briefingAskPrompt: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '20',
+  },
+  briefingAskPromptText: {
+    flex: 1,
+    fontSize: 13,
+    color: COLORS.primary.DEFAULT,
+    fontWeight: FONT_WEIGHTS.medium,
+  },
   briefingFooter: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -837,5 +918,23 @@ const styles = StyleSheet.create({
   moduleStat: {
     fontSize: 12,
     color: COLORS.text.secondary,
+  },
+
+  // Floating Ask FAB
+  askFab: {
+    position: 'absolute',
+    right: 20,
+    bottom: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: COLORS.primary.DEFAULT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
   },
 });

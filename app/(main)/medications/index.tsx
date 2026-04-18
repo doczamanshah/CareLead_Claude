@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/components/ui/Card';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import {
@@ -74,7 +75,22 @@ export default function MedicationsScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Medications</Text>
+          <View style={styles.headerRow}>
+            <Text style={styles.title}>Medications</Text>
+            <TouchableOpacity
+              onPress={() => router.push({ pathname: '/(main)/ask', params: { domain: 'medications' } })}
+              style={styles.askButton}
+              activeOpacity={0.7}
+              accessibilityLabel="Ask CareLead about medications"
+            >
+              <Ionicons
+                name="chatbubble-ellipses-outline"
+                size={18}
+                color={COLORS.primary.DEFAULT}
+              />
+              <Text style={styles.askButtonText}>Ask</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Today's Medications */}
@@ -368,6 +384,25 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES['2xl'],
     fontWeight: FONT_WEIGHTS.bold,
     color: COLORS.text.DEFAULT,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  askButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 16,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+  },
+  askButtonText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
   },
   section: {
     paddingHorizontal: 24,
