@@ -23,7 +23,9 @@ import {
   useBillingBriefing,
   useBillingActiveCriticalCount,
 } from '@/hooks/useBilling';
+import { useResults, useResultsBriefing } from '@/hooks/useResults';
 import type { BillingBriefingItem } from '@/services/billingBriefing';
+import type { ResultsBriefingItem } from '@/services/resultsBriefing';
 import { needsMedicationMigration, migrateMedicationFacts } from '@/services/medicationMigration';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
@@ -74,6 +76,7 @@ const QUICK_ACTIONS = [
 const MODULE_CARDS = [
   { key: 'medications', icon: 'medkit' as const, label: 'Meds', route: '/(main)/medications' },
   { key: 'appointments', icon: 'calendar' as const, label: 'Appts', route: '/(main)/appointments' },
+  { key: 'results', icon: 'flask-outline' as const, label: 'Results', route: '/(main)/results' },
   { key: 'billing', icon: 'receipt' as const, label: 'Bills', route: '/(main)/billing' },
   { key: 'caregivers', icon: 'people' as const, label: 'Care Team', route: '/(main)/caregivers' },
   { key: 'documents', icon: 'document-text' as const, label: 'Docs', route: '/(main)/(tabs)/documents' },
@@ -94,6 +97,8 @@ export default function HomeScreen() {
   const { data: billingCases } = useBillingCases(activeProfileId);
   const { data: billingBriefing } = useBillingBriefing(activeProfileId, 3);
   const { data: billingCriticalCount } = useBillingActiveCriticalCount(activeProfileId);
+  const { data: results } = useResults(activeProfileId);
+  const { data: resultsBriefing } = useResultsBriefing(activeProfileId, 2);
 
   // Auto-migrate medication profile_facts → med_medications on first load
   const migrationRanRef = useRef<string | null>(null);
@@ -152,6 +157,7 @@ export default function HomeScreen() {
     const attentionCount = needsCloseout.length;
 
     const billingItems: BillingBriefingItem[] = billingBriefing ?? [];
+    const resultsItems: ResultsBriefingItem[] = resultsBriefing ?? [];
 
     const nothingDue =
       !hasMeds &&
@@ -159,7 +165,8 @@ export default function HomeScreen() {
       tasksDueCount === 0 &&
       overdueCount === 0 &&
       attentionCount === 0 &&
-      billingItems.length === 0;
+      billingItems.length === 0 &&
+      resultsItems.length === 0;
 
     return {
       hasMeds,
@@ -170,9 +177,10 @@ export default function HomeScreen() {
       overdueCount,
       attentionCount,
       billingItems,
+      resultsItems,
       nothingDue,
     };
-  }, [todaysDoses, allAppointments, openTasks, billingBriefing]);
+  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing]);
 
   // Module stats
   const moduleStats = useMemo(() => {
@@ -185,15 +193,22 @@ export default function HomeScreen() {
     const activeBillingCount = (billingCases ?? []).filter(
       (c) => c.status !== 'resolved' && c.status !== 'closed',
     ).length;
+    const resultsCount = (results ?? []).filter((r) => r.status !== 'archived').length;
 
     return {
       medications: medCount > 0 ? `${medCount} active` : 'None yet',
       appointments: upcomingApts > 0 ? `${upcomingApts} upcoming` : 'None yet',
+      results: resultsCount > 0 ? `${resultsCount} saved` : 'None yet',
       billing: activeBillingCount > 0 ? `${activeBillingCount} active` : 'None yet',
       caregivers: 'Manage',
       documents: docCount > 0 ? `${docCount} saved` : 'None yet',
     };
-  }, [medications, allAppointments, artifacts, billingCases]);
+  }, [medications, allAppointments, artifacts, billingCases, results]);
+
+  const resultsNeedsReviewCount = useMemo(
+    () => (results ?? []).filter((r) => r.status === 'needs_review').length,
+    [results],
+  );
 
   const todayDateStr = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
@@ -376,6 +391,37 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                       );
                     })}
+                    {briefing.resultsItems.map((item) => {
+                      const iconColor =
+                        item.color === 'warning'
+                          ? COLORS.accent.dark
+                          : item.color === 'info'
+                          ? COLORS.primary.DEFAULT
+                          : COLORS.primary.DEFAULT;
+                      const destination = item.resultId
+                        ? `/(main)/results/${item.resultId}`
+                        : '/(main)/results';
+                      return (
+                        <TouchableOpacity
+                          key={item.key}
+                          style={styles.briefingLine}
+                          activeOpacity={0.7}
+                          onPress={(e) => {
+                            e.stopPropagation?.();
+                            router.push(destination);
+                          }}
+                        >
+                          <Ionicons
+                            name={item.icon as keyof typeof Ionicons.glyphMap}
+                            size={18}
+                            color={iconColor}
+                          />
+                          <Text style={styles.briefingLineText} numberOfLines={2}>
+                            {item.message}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
                 )}
 
@@ -420,8 +466,13 @@ export default function HomeScreen() {
               contentContainerStyle={styles.modulesContent}
             >
               {MODULE_CARDS.map((mod) => {
-                const showBillingBadge =
-                  mod.key === 'billing' && (billingCriticalCount ?? 0) > 0;
+                const badgeCount =
+                  mod.key === 'billing'
+                    ? billingCriticalCount ?? 0
+                    : mod.key === 'results'
+                    ? resultsNeedsReviewCount
+                    : 0;
+                const showBadge = badgeCount > 0;
                 return (
                   <TouchableOpacity
                     key={mod.key}
@@ -431,11 +482,9 @@ export default function HomeScreen() {
                   >
                     <View style={styles.moduleIconRow}>
                       <Ionicons name={mod.icon} size={22} color={COLORS.primary.DEFAULT} />
-                      {showBillingBadge && (
+                      {showBadge && (
                         <View style={styles.moduleBadge}>
-                          <Text style={styles.moduleBadgeText}>
-                            {billingCriticalCount}
-                          </Text>
+                          <Text style={styles.moduleBadgeText}>{badgeCount}</Text>
                         </View>
                       )}
                     </View>

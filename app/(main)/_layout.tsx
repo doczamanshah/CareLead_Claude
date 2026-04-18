@@ -19,6 +19,7 @@ export default function MainLayout() {
       <Stack.Screen name="medications" options={{ animation: 'slide_from_right' }} />
       <Stack.Screen name="caregivers" options={{ animation: 'slide_from_right' }} />
       <Stack.Screen name="billing" options={{ animation: 'slide_from_right' }} />
+      <Stack.Screen name="results" options={{ animation: 'slide_from_right' }} />
     </Stack>
   );
 }

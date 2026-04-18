@@ -4,14 +4,18 @@ import { COLORS } from '@/lib/constants/colors';
 interface CardProps {
   children: React.ReactNode;
   onPress?: () => void;
+  onLongPress?: () => void;
+  delayLongPress?: number;
   style?: ViewStyle;
 }
 
-export function Card({ children, onPress, style }: CardProps) {
-  if (onPress) {
+export function Card({ children, onPress, onLongPress, delayLongPress, style }: CardProps) {
+  if (onPress || onLongPress) {
     return (
       <TouchableOpacity
         onPress={onPress}
+        onLongPress={onLongPress}
+        delayLongPress={delayLongPress}
         activeOpacity={0.7}
         style={[styles.card, style]}
       >
