@@ -335,6 +335,11 @@ export default function ResultDetailScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
       <ScrollView
         style={styles.flex}
         contentContainerStyle={styles.scrollContent}
@@ -694,6 +699,7 @@ export default function ResultDetailScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Edit Details Modal */}
       <Modal

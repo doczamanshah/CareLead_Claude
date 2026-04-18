@@ -24,8 +24,10 @@ import {
   useBillingActiveCriticalCount,
 } from '@/hooks/useBilling';
 import { useResults, useResultsBriefing } from '@/hooks/useResults';
+import { usePreventiveItems, usePreventiveBriefing } from '@/hooks/usePreventive';
 import type { BillingBriefingItem } from '@/services/billingBriefing';
 import type { ResultsBriefingItem } from '@/services/resultsBriefing';
+import type { PreventiveBriefingItem } from '@/services/preventiveBriefing';
 import { needsMedicationMigration, migrateMedicationFacts } from '@/services/medicationMigration';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
@@ -78,6 +80,7 @@ const MODULE_CARDS = [
   { key: 'appointments', icon: 'calendar' as const, label: 'Appts', route: '/(main)/appointments' },
   { key: 'results', icon: 'flask-outline' as const, label: 'Results', route: '/(main)/results' },
   { key: 'billing', icon: 'receipt' as const, label: 'Bills', route: '/(main)/billing' },
+  { key: 'preventive', icon: 'shield-checkmark-outline' as const, label: 'Preventive', route: '/(main)/preventive' },
   { key: 'caregivers', icon: 'people' as const, label: 'Care Team', route: '/(main)/caregivers' },
   { key: 'documents', icon: 'document-text' as const, label: 'Docs', route: '/(main)/(tabs)/documents' },
 ];
@@ -99,6 +102,8 @@ export default function HomeScreen() {
   const { data: billingCriticalCount } = useBillingActiveCriticalCount(activeProfileId);
   const { data: results } = useResults(activeProfileId);
   const { data: resultsBriefing } = useResultsBriefing(activeProfileId, 2);
+  const { data: preventiveItems } = usePreventiveItems(activeProfileId);
+  const { data: preventiveBriefing } = usePreventiveBriefing(activeProfileId, 2);
 
   // Auto-migrate medication profile_facts → med_medications on first load
   const migrationRanRef = useRef<string | null>(null);
@@ -158,6 +163,7 @@ export default function HomeScreen() {
 
     const billingItems: BillingBriefingItem[] = billingBriefing ?? [];
     const resultsItems: ResultsBriefingItem[] = resultsBriefing ?? [];
+    const preventiveItems: PreventiveBriefingItem[] = preventiveBriefing ?? [];
 
     const nothingDue =
       !hasMeds &&
@@ -166,7 +172,8 @@ export default function HomeScreen() {
       overdueCount === 0 &&
       attentionCount === 0 &&
       billingItems.length === 0 &&
-      resultsItems.length === 0;
+      resultsItems.length === 0 &&
+      preventiveItems.length === 0;
 
     return {
       hasMeds,
@@ -178,9 +185,10 @@ export default function HomeScreen() {
       attentionCount,
       billingItems,
       resultsItems,
+      preventiveItems,
       nothingDue,
     };
-  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing]);
+  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing, preventiveBriefing]);
 
   // Module stats
   const moduleStats = useMemo(() => {
@@ -194,16 +202,39 @@ export default function HomeScreen() {
       (c) => c.status !== 'resolved' && c.status !== 'closed',
     ).length;
     const resultsCount = (results ?? []).filter((r) => r.status !== 'archived').length;
+    const preventiveDueCount = (preventiveItems ?? []).filter(
+      (p) => p.status === 'due' || p.status === 'due_soon',
+    ).length;
+    const preventiveHasItems = (preventiveItems ?? []).length > 0;
 
     return {
       medications: medCount > 0 ? `${medCount} active` : 'None yet',
       appointments: upcomingApts > 0 ? `${upcomingApts} upcoming` : 'None yet',
       results: resultsCount > 0 ? `${resultsCount} saved` : 'None yet',
       billing: activeBillingCount > 0 ? `${activeBillingCount} active` : 'None yet',
+      preventive:
+        preventiveDueCount > 0
+          ? `${preventiveDueCount} due`
+          : preventiveHasItems
+          ? 'All up to date'
+          : 'Run check',
       caregivers: 'Manage',
       documents: docCount > 0 ? `${docCount} saved` : 'None yet',
     };
-  }, [medications, allAppointments, artifacts, billingCases, results]);
+  }, [medications, allAppointments, artifacts, billingCases, results, preventiveItems]);
+
+  const preventiveDueCount = useMemo(
+    () =>
+      (preventiveItems ?? []).filter(
+        (p) => p.status === 'due' || p.status === 'due_soon',
+      ).length,
+    [preventiveItems],
+  );
+
+  const preventiveAllUpToDate = useMemo(
+    () => (preventiveItems ?? []).length > 0 && preventiveDueCount === 0,
+    [preventiveItems, preventiveDueCount],
+  );
 
   const resultsNeedsReviewCount = useMemo(
     () => (results ?? []).filter((r) => r.status === 'needs_review').length,
@@ -422,6 +453,46 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                       );
                     })}
+                    {briefing.preventiveItems.map((item) => {
+                      const isCritical = item.color === 'critical';
+                      const iconColor =
+                        item.color === 'critical'
+                          ? COLORS.error.DEFAULT
+                          : item.color === 'warning'
+                          ? COLORS.accent.dark
+                          : item.color === 'success'
+                          ? COLORS.success.DEFAULT
+                          : COLORS.primary.DEFAULT;
+                      const destination = item.itemId
+                        ? `/(main)/preventive/${item.itemId}`
+                        : '/(main)/preventive';
+                      return (
+                        <TouchableOpacity
+                          key={item.key}
+                          style={styles.briefingLine}
+                          activeOpacity={0.7}
+                          onPress={(e) => {
+                            e.stopPropagation?.();
+                            router.push(destination);
+                          }}
+                        >
+                          <Ionicons
+                            name={item.icon as keyof typeof Ionicons.glyphMap}
+                            size={18}
+                            color={iconColor}
+                          />
+                          <Text
+                            style={[
+                              styles.briefingLineText,
+                              isCritical && styles.briefingLineTextWarning,
+                            ]}
+                            numberOfLines={2}
+                          >
+                            {item.message}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                   </View>
                 )}
 
@@ -471,8 +542,16 @@ export default function HomeScreen() {
                     ? billingCriticalCount ?? 0
                     : mod.key === 'results'
                     ? resultsNeedsReviewCount
+                    : mod.key === 'preventive'
+                    ? preventiveDueCount
                     : 0;
                 const showBadge = badgeCount > 0;
+                const statColor =
+                  mod.key === 'preventive' && preventiveAllUpToDate
+                    ? COLORS.success.DEFAULT
+                    : mod.key === 'preventive' && preventiveDueCount > 0
+                    ? COLORS.error.DEFAULT
+                    : COLORS.text.secondary;
                 return (
                   <TouchableOpacity
                     key={mod.key}
@@ -489,7 +568,7 @@ export default function HomeScreen() {
                       )}
                     </View>
                     <Text style={styles.moduleLabel}>{mod.label}</Text>
-                    <Text style={styles.moduleStat}>
+                    <Text style={[styles.moduleStat, { color: statColor }]}>
                       {moduleStats[mod.key as keyof typeof moduleStats]}
                     </Text>
                   </TouchableOpacity>

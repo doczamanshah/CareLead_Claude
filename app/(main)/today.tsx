@@ -12,6 +12,8 @@ import { useTodaysDoses, useLogAdherence } from '@/hooks/useMedications';
 import { useProfileGaps } from '@/hooks/useProfileGaps';
 import { useBillingBriefing } from '@/hooks/useBilling';
 import { useResultsBriefing } from '@/hooks/useResults';
+import { usePreventiveItems } from '@/hooks/usePreventive';
+import { PREVENTIVE_STATUS_LABELS } from '@/lib/types/preventive';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { Task } from '@/lib/types/tasks';
@@ -74,6 +76,7 @@ export default function TodayDetailScreen() {
   const { data: gaps } = useProfileGaps(activeProfileId ?? undefined);
   const { data: billingBriefing } = useBillingBriefing(activeProfileId, 5);
   const { data: resultsBriefing } = useResultsBriefing(activeProfileId, 5);
+  const { data: preventiveItems } = usePreventiveItems(activeProfileId);
   const updateStatus = useUpdateTaskStatus();
   const logAdherence = useLogAdherence();
 
@@ -127,6 +130,18 @@ export default function TodayDetailScreen() {
   const scheduledDoses = useMemo(() => {
     return (todaysDoses ?? []).filter((d) => !d.medication.prn_flag);
   }, [todaysDoses]);
+
+  // Preventive: due + due_soon
+  const preventiveAttention = useMemo(() => {
+    return (preventiveItems ?? [])
+      .filter((p) => p.status === 'due' || p.status === 'due_soon')
+      .sort((a, b) => {
+        if (a.status !== b.status) return a.status === 'due' ? -1 : 1;
+        const aDue = a.due_date ?? '';
+        const bDue = b.due_date ?? '';
+        return aDue.localeCompare(bDue);
+      });
+  }, [preventiveItems]);
 
   const todayDateStr = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
@@ -335,6 +350,44 @@ export default function TodayDetailScreen() {
         </View>
       )}
 
+      {/* PREVENTIVE CARE */}
+      {preventiveAttention.length > 0 && (
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="shield-checkmark-outline" size={18} color={COLORS.primary.DEFAULT} />
+            <Text style={styles.sectionTitle}>Preventive Care</Text>
+          </View>
+          {preventiveAttention.map((item) => {
+            const isDue = item.status === 'due';
+            const iconColor = isDue ? COLORS.error.DEFAULT : COLORS.accent.dark;
+            return (
+              <Card
+                key={item.id}
+                style={styles.itemCard}
+                onPress={() => router.push(`/(main)/preventive/${item.id}`)}
+              >
+                <View style={styles.itemRow}>
+                  <Ionicons
+                    name={isDue ? 'alert-circle' : 'time-outline'}
+                    size={20}
+                    color={iconColor}
+                  />
+                  <View style={[styles.itemContent, { marginLeft: 10 }]}>
+                    <Text style={styles.itemTitle} numberOfLines={2}>
+                      {item.rule.title}
+                    </Text>
+                    <Text style={[styles.itemMeta, isDue && styles.overdueText]}>
+                      {PREVENTIVE_STATUS_LABELS[item.status]}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={COLORS.text.tertiary} />
+                </View>
+              </Card>
+            );
+          })}
+        </View>
+      )}
+
       {/* NEEDS ATTENTION */}
       {(needsCloseout.length > 0 || highGaps.length > 0 || (billingBriefing ?? []).length > 0) && (
         <View style={styles.section}>
@@ -426,7 +479,8 @@ export default function TodayDetailScreen() {
         needsCloseout.length === 0 &&
         highGaps.length === 0 &&
         (billingBriefing ?? []).length === 0 &&
-        (resultsBriefing ?? []).length === 0 && (
+        (resultsBriefing ?? []).length === 0 &&
+        preventiveAttention.length === 0 && (
           <View style={styles.allClear}>
             <Ionicons name="checkmark-circle" size={48} color={COLORS.success.DEFAULT} />
             <Text style={styles.allClearTitle}>All caught up!</Text>

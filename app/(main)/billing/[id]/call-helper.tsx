@@ -216,7 +216,15 @@ export default function CallHelperScreen() {
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
           <Text style={styles.topTitle}>Call Helper</Text>
-          <View style={styles.topSpacer} />
+          <TouchableOpacity
+            onPress={() => router.replace('/(main)/(tabs)')}
+            style={styles.homeButton}
+            activeOpacity={0.7}
+            hitSlop={8}
+            accessibilityLabel="Go to Home"
+          >
+            <Ionicons name="home-outline" size={20} color={COLORS.text.secondary} />
+          </TouchableOpacity>
         </View>
 
         <ScrollView
@@ -555,6 +563,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   topSpacer: { width: 56 },
+  homeButton: {
+    padding: 6,
+    marginLeft: 4,
+  },
 
   section: {
     paddingHorizontal: 24,

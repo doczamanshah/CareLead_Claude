@@ -154,6 +154,11 @@ export default function AppealsScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
       <ScrollView
         style={styles.flex}
         contentContainerStyle={styles.scrollContent}
@@ -162,9 +167,20 @@ export default function AppealsScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => router.back()}>
-            <Text style={styles.backText}>{'\u2039'} Back</Text>
-          </TouchableOpacity>
+          <View style={styles.headerTopRow}>
+            <TouchableOpacity onPress={() => router.back()}>
+              <Text style={styles.backText}>{'\u2039'} Back</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => router.replace('/(main)/(tabs)')}
+              style={styles.homeButton}
+              activeOpacity={0.7}
+              hitSlop={8}
+              accessibilityLabel="Go to Home"
+            >
+              <Ionicons name="home-outline" size={20} color={COLORS.text.secondary} />
+            </TouchableOpacity>
+          </View>
           <Text style={styles.title}>Denials & Appeals</Text>
           <Text style={styles.subtitle}>{billingCase.title}</Text>
         </View>
@@ -292,6 +308,7 @@ export default function AppealsScreen() {
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -363,9 +380,8 @@ function ManualDenialForm({
   const canSubmit = reason.trim().length > 0 && !isSubmitting;
 
   return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <Card style={styles.formCard}>
-        <Text style={styles.formTitle}>Report a Denial</Text>
+    <Card style={styles.formCard}>
+      <Text style={styles.formTitle}>Report a Denial</Text>
 
         <Text style={styles.formLabel}>Denial Category</Text>
         <View style={styles.categoryGrid}>
@@ -434,8 +450,7 @@ function ManualDenialForm({
             loading={isSubmitting}
           />
         </View>
-      </Card>
-    </KeyboardAvoidingView>
+    </Card>
   );
 }
 
@@ -931,11 +946,20 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border.light,
   },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  homeButton: {
+    padding: 6,
+    marginRight: -6,
+  },
   backText: {
     fontSize: FONT_SIZES.base,
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.medium,
-    marginBottom: 8,
   },
   title: {
     fontSize: FONT_SIZES['2xl'],

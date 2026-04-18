@@ -534,14 +534,25 @@ export default function ReviewResultScreen() {
         >
           {/* Header */}
           <View style={styles.header}>
-            <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-              <Ionicons
-                name="chevron-back"
-                size={22}
-                color={COLORS.primary.DEFAULT}
-              />
-              <Text style={styles.backText}>Back</Text>
-            </TouchableOpacity>
+            <View style={styles.headerTopRow}>
+              <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+                <Ionicons
+                  name="chevron-back"
+                  size={22}
+                  color={COLORS.primary.DEFAULT}
+                />
+                <Text style={styles.backText}>Back</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => router.replace('/(main)/(tabs)')}
+                style={styles.homeButton}
+                activeOpacity={0.7}
+                hitSlop={8}
+                accessibilityLabel="Go to Home"
+              >
+                <Ionicons name="home-outline" size={20} color={COLORS.text.secondary} />
+              </TouchableOpacity>
+            </View>
             <Text style={styles.title} numberOfLines={2}>
               Review Result
             </Text>
@@ -1121,12 +1132,20 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
   },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
   backButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-start',
-    marginBottom: 8,
     marginLeft: -4,
+  },
+  homeButton: {
+    padding: 6,
+    marginRight: -6,
   },
   backText: {
     fontSize: FONT_SIZES.base,

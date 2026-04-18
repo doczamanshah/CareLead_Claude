@@ -385,6 +385,11 @@ export default function BillingCaseDetailScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
       <ScrollView
         ref={scrollRef}
         style={styles.flex}
@@ -803,6 +808,7 @@ export default function BillingCaseDetailScreen() {
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Edit Details Modal */}
       <Modal

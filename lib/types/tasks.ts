@@ -2,7 +2,7 @@
 
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'dismissed';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
-export type TaskSourceType = 'manual' | 'intent_sheet' | 'appointment' | 'medication' | 'billing';
+export type TaskSourceType = 'manual' | 'intent_sheet' | 'appointment' | 'medication' | 'billing' | 'preventive';
 export type TaskDependencyStatus = 'blocked' | 'ready';
 export type TaskTriggerType = 'manual' | 'extraction' | 'proactive' | 'time_based' | 'chain';
 export type TaskRecurrenceRule = 'daily' | 'weekly' | 'monthly' | 'every_3_months' | 'every_6_months' | 'yearly';
