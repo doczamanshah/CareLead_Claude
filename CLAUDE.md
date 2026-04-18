@@ -53,8 +53,14 @@ CareLead is a patient-owned, AI-first care operations platform that helps patien
 
 ## Supabase Setup Requirements
 
-### Storage Bucket
-A **private** storage bucket named `artifacts` must be created manually in the Supabase Dashboard (Storage > New Bucket > name: `artifacts`, private: true). This bucket stores all uploaded documents, photos, and files.
+### Storage Buckets
+All buckets are **private** and must be created manually in the Supabase Dashboard (Storage > New Bucket, private: true). Bucket policies (INSERT/SELECT/DELETE for authenticated users) must be created via the Dashboard UI — not via SQL Editor (the `storage.objects` table has an ownership issue that prevents policy creation via SQL).
+
+| Bucket | Phase | Purpose |
+|--------|-------|---------|
+| `artifacts` | Phase 1 | All Intent Sheet documents, photos, note artifacts |
+| `billing-documents` | Phase 2 | Bills, EOBs, appeal-related documents |
+| `result-documents` | Phase 2 | Lab/imaging reports (also used for preventive care proof documents) |
 
 ### Edge Function Secrets
 The following secrets must be set for Edge Functions:
@@ -69,6 +75,10 @@ Deploy Edge Functions with JWT verification disabled (required for the current a
 ```bash
 supabase functions deploy extract-document --no-verify-jwt --project-ref ccpxoidlqsolzypmkiul
 supabase functions deploy process-visit-prep --no-verify-jwt --project-ref ccpxoidlqsolzypmkiul
+supabase functions deploy extract-billing --no-verify-jwt --project-ref ccpxoidlqsolzypmkiul
+supabase functions deploy generate-appeal-letter --no-verify-jwt --project-ref ccpxoidlqsolzypmkiul
+supabase functions deploy extract-result --no-verify-jwt --project-ref ccpxoidlqsolzypmkiul
+supabase functions deploy extract-preventive-date --no-verify-jwt --project-ref ccpxoidlqsolzypmkiul
 ```
 
 ---
@@ -314,6 +324,7 @@ The Home screen (`app/(main)/(tabs)/index.tsx`) uses a 5-zone vertical layout:
 ### Zone 2: Today's Briefing Card
 - Card with 4px left accent bar (`secondary` color)
 - Dynamic content: all-clear state (checkmark icon) OR list of items (meds due, next appointment, tasks due, items needing attention)
+- Briefing aggregates items from multiple modules via per-module briefing services (`services/billingBriefing.ts`, `services/resultsBriefing.ts`, `services/preventiveBriefing.ts`, plus tasks/appointments/meds)
 - "View details" link navigates to the Today Detail screen (`/(main)/today`)
 
 ### Zone 3: Quick Actions
@@ -321,8 +332,9 @@ The Home screen (`app/(main)/(tabs)/index.tsx`) uses a 5-zone vertical layout:
 - Each card: icon in a light circle, subtle border, `secondary.DEFAULT + '14'` background (8% opacity)
 
 ### Zone 4: Module Shortcuts
-- Horizontal scroll of 4 module cards: Medications, Appointments, Care Team, Documents
-- Each shows: icon, label, dynamic stat (e.g., "5 active", "2 upcoming")
+- Horizontal scroll of module cards with dynamic stat badges
+- Cards: Medications (`medkit`), Appointments (`calendar`), Care Team (`people`), Documents (`document-text`), Bills (`receipt-outline`), Results (`flask-outline`), Preventive Care (`shield-checkmark-outline`)
+- Each shows: icon, label, dynamic stat (e.g., "5 active", "2 upcoming", "3 due", "1 needs review")
 
 ### Zone 5: Body Container
 - 24px horizontal padding, `COLORS.background.DEFAULT` (#F8F9FA) background
@@ -333,8 +345,11 @@ Expanded view of today's items with sections:
 1. **Medications** — today's scheduled doses with Take/Skip buttons
 2. **Appointments** — today/tomorrow with prep status indicators
 3. **Tasks** — overdue + due today, priority-sorted
-4. **Needs Attention** — post-visit closeouts + high-priority profile gaps
-5. **All Clear** — success state when nothing is pending
+4. **Bills** — open cases with pending actions, reconciliation findings, upcoming payments
+5. **Results** — items needing review, pinned results, recently added
+6. **Preventive Care** — items due / due soon, needs_review items
+7. **Needs Attention** — post-visit closeouts + high-priority profile gaps
+8. **All Clear** — success state when nothing is pending
 
 ---
 
@@ -462,6 +477,26 @@ Reusable cross-platform date/time picker wrapping `@react-native-community/datet
 - AI suggestions clearly marked with `"ai_suggested"` source and reason
 - Driver info goes to `logistics.driver`, NOT `what_to_bring`
 - Never invents symptoms, diagnoses, or medications
+
+### 3. `extract-billing` — Bill & EOB Extraction (Phase 2)
+**File**: `supabase/functions/extract-billing/index.ts`
+**Purpose**: Analyzes uploaded bills/EOBs OR freeform text about a billing case and extracts structured billing data (totals, line items, provider/payer, dates, denial info).
+**Used by**: Bills & EOBs module (document uploads + "Start a New Bill" freeform entry mode).
+
+### 4. `generate-appeal-letter` — Appeal Letter Drafting (Phase 2)
+**File**: `supabase/functions/generate-appeal-letter/index.ts`
+**Purpose**: Drafts an editable appeal letter from denial context, case details, and patient rationale.
+**Used by**: Bills & EOBs appeal packet screen.
+
+### 5. `extract-result` — Lab/Imaging Result Extraction (Phase 2)
+**File**: `supabase/functions/extract-result/index.ts`
+**Purpose**: Type-aware extraction — labs produce an analyte list with flags and reference ranges; imaging produces findings + impression; "other" produces key findings.
+**Used by**: Results module (all three entry modes: type/paste, dictate, upload).
+
+### 6. `extract-preventive-date` — Completion Date Extraction (Phase 2)
+**File**: `supabase/functions/extract-preventive-date/index.ts`
+**Purpose**: Extracts completion date from an uploaded proof document (e.g., mammogram report) for marking a preventive care item complete.
+**Used by**: Preventive Care item detail (mark-complete with document proof).
 
 ---
 
@@ -910,6 +945,45 @@ Migration 00010 made `invited_email` optional and added `invited_phone`. An invi
 ### Visit Prep is Patient-Voice-First
 The `process-visit-prep` Edge Function always puts the patient's own words first (source: `"patient"`). AI suggestions are separate and clearly marked (source: `"ai_suggested"`). Never mix or re-order these — the patient's voice is always primary.
 
+### crypto.randomUUID() Does Not Exist in React Native
+Generate client-side IDs with `Date.now() + Math.random()` (or similar) — `crypto.randomUUID()` is not available in the React Native runtime. Server-generated UUIDs (via Postgres `gen_random_uuid()`) remain the default; only use client-generated IDs for optimistic/local state.
+
+### Storage Bucket Policies via Dashboard, Not SQL Editor
+`storage.objects` has an ownership issue that prevents INSERT/SELECT/DELETE policies from being created via the SQL Editor. Always create bucket policies through the Supabase Dashboard UI. This applies to `artifacts`, `billing-documents`, and `result-documents`.
+
+---
+
+## Cross-Module Patterns
+
+Patterns followed by every Phase 2 module (Bills, Results, Preventive Care) and expected for any future module:
+
+### Service Layer
+- All service functions return `ServiceResult<T>` wrappers (`{ success: true, data } | { success: false, error }`)
+- Services never throw to UI — errors flow through the wrapper
+- Audit events logged for every create/update/delete operation (non-PHI metadata only)
+- No cross-module service imports — shared logic lives in shared services (e.g., `profileFactUpsert.ts`)
+
+### Hooks & State
+- TanStack Query hooks with consistent cache invalidation on mutations
+- Query keys follow `[module, action, ...params]` pattern
+- Server state in TanStack Query, UI state in Zustand, form state in React Hook Form
+
+### UI
+- `StyleSheet.create()` with colors from `lib/constants/colors.ts` (no NativeWind)
+- Ionicons via `@expo/vector-icons` (never mix icon libraries)
+- `@react-native-community/datetimepicker` (via reusable `DatePicker` component) for all date inputs
+- `KeyboardAvoidingView` on any screen with text inputs
+- Home button (`home-outline`) in the header on screens 3+ levels deep
+
+### Backend
+- Same RLS pattern on every table: `has_profile_access(profile_id)` helper
+- Every Edge Function: CORS headers from `_shared/cors.ts`, Claude API call, JSON parse, structured error handling
+- Storage bucket policies created via Supabase Dashboard (never SQL Editor)
+
+### Client-Side IDs
+- Use `Date.now() + Math.random()` (or similar) for optimistic/local IDs
+- Server-generated UUIDs (Postgres `gen_random_uuid()`) remain the default for persisted rows
+
 ---
 
 ## Git Workflow
@@ -1019,15 +1093,83 @@ When building a new module, follow this exact sequence:
 - [x] **Step 9**: Caregivers — invite via email/phone, 6 permission templates, fine-grained scopes, consent audit trail, access revocation
 - [x] **Step 10**: Home screen redesign — 5-zone layout, gradient hero, Today's Briefing, quick actions, module shortcuts, Today Detail screen
 
-### Phase 2: Candidates (next priorities)
-- [ ] Profile Snapshot & Export (PDF generation, shareable health summary)
-- [ ] Onboarding flow (guided first-time experience, profile setup wizard)
-- [ ] Offline support (queue mutations while offline, sync on reconnect)
-- [ ] Search across profile (full-text search across facts, medications, appointments, tasks)
-- [ ] Notification preferences (granular control over push notification types)
-- [ ] Bills & EOBs module (insurance claims, explanation of benefits, bill tracking)
-- [ ] Results module (lab results, imaging reports, trend visualization)
-- [ ] Data export (download all data as structured JSON/PDF)
-- [ ] App Store preparation (privacy policy, terms, screenshots, metadata)
-- [ ] Performance optimization (query caching tuning, image compression, bundle size)
-- [ ] Error handling hardening (retry logic, offline graceful degradation)
+### Phase 2: IN PROGRESS
+
+#### Step 1: Bills & EOBs Module — COMPLETE (all 9 steps)
+- **Database**: 13 billing tables across migrations `20260410_billing_cases_schema.sql`, `20260410_billing_add_freeform.sql`, `20260417_fix_billing_rls.sql`:
+  - `billing_cases`, `billing_documents`, `billing_extract_jobs`, `billing_ledger_lines`, `billing_case_findings`, `billing_case_actions`, `billing_case_call_logs`, `billing_case_payments`, `billing_denial_records`, `billing_appeal_packets`, `billing_contacts`, `billing_case_parties`, `billing_case_status_events`
+- **Storage bucket**: `billing-documents` (private) with INSERT/SELECT/DELETE policies for authenticated users
+- **Edge Functions**: `extract-billing` (document + freeform text extraction), `generate-appeal-letter` (appeal drafting)
+- **Key files**:
+  - `lib/types/billing.ts` — all billing type definitions
+  - `services/billing.ts` — full CRUD, extraction triggers, payments, call logs, findings persistence, action activation with task creation
+  - `services/billingReconciliation.ts` — deterministic engine with 10 checks: `missing_bill`, `missing_eob`, `low_doc_quality`, `low_confidence`, `total_mismatch`, `denial_detected`, `possible_overpayment`, `missing_provider`, `missing_payer`, `no_service_dates`
+  - `services/billingActionPlan.ts` — action plan generation from findings, auto-complete/auto-dismiss logic
+  - `services/billingCallScripts.ts` — context-aware call scripts (provider/payer/pharmacy)
+  - `services/billingBriefing.ts` — Home screen briefing items
+  - `services/billingTimeline.ts` — chronological timeline from all billing events
+  - `hooks/useBilling.ts` — all TanStack Query hooks
+  - Screens: `app/(main)/billing/` — index (case list), create (two entry modes), start (freeform), `[id]/index` (detail with totals, line items, documents, findings, action plan, calls, payments, denials, timeline), `[id]/add-document`, `[id]/call-helper`, `[id]/appeals`
+- **Patterns established**:
+  - Two-mode case creation: "Snap a Bill" (camera) + "Start a New Bill" (freeform/blank)
+  - Freeform text → AI extraction → auto-populate case fields
+  - Reconciliation runs client-side after extraction, document upload, payment changes
+  - Action plan: findings → proposed actions → user review → activate → creates tasks
+  - "Strengthen Your Case" indicator derived from findings
+  - Call scripts with copyable reference numbers; call logs can create follow-up tasks
+  - Appeal packet: checklist, document selector, AI-generated editable letter, status tracking
+
+#### Step 2: Results Module — COMPLETE (all 7 steps)
+- **Database**: 4 tables across migrations `20260417_results_schema.sql`, `20260418_result_observations_unique.sql`:
+  - `result_items`, `result_documents`, `result_lab_observations`, `result_extract_jobs`
+- **Storage bucket**: `result-documents` (private) with INSERT/SELECT/DELETE policies for authenticated users
+- **Edge Function**: `extract-result` (type-specific prompts for labs / imaging / other)
+- **Key files**:
+  - `lib/types/results.ts` — all result type definitions
+  - `services/results.ts` — full CRUD, extraction triggers, lab observations, pin/tags
+  - `services/resultExport.ts` — shareable text summary with disclaimer
+  - `services/resultsBriefing.ts` — Home screen briefing items
+  - `hooks/useResults.ts` — all TanStack Query hooks
+  - Screens: `app/(main)/results/` — index (search, filters, sort, pin), add (three modes), add-typed, add-dictated, add-upload, `[id]/index` (type-aware structured display, extraction status, share), `[id]/review` (corrections + Intent Sheet confirmation)
+- **Patterns established**:
+  - Three entry modes: Type/Paste, Dictate, Upload Report
+  - Type-aware extraction: labs → analyte list with flags; imaging → findings/impression; other → key findings
+  - Needs Review state + user corrections overlay (`user_corrections` stored separately from `structured_data`)
+  - `getEffectiveData()` merges extraction + corrections for display
+  - Lab observations written to the trend-ready `result_lab_observations` table on confirmation
+  - Search with debounce, multi-dimension filters (type/status/time), sort options
+  - Long-press to pin; pinned items sort first
+
+#### Step 3: Preventive Care Module — COMPLETE (all 6 steps)
+- **Database**: 4 tables + 10 seed rules across migrations `20260418_preventive_care_schema.sql`, `20260418_preventive_task_source.sql`, `20260419_preventive_evidence_path.sql`:
+  - `preventive_rules`, `preventive_items`, `preventive_item_events`, `preventive_intent_sheets`
+- **Edge Function**: `extract-preventive-date` (completion date extraction from proof documents)
+- **Key files**:
+  - `lib/types/preventive.ts` — all preventive type definitions
+  - `services/preventiveEngine.ts` — deterministic eligibility engine (age/sex/condition evaluation, cadence-based due-date calculation, missing-data detection)
+  - `services/preventive.ts` — full CRUD, scan orchestration, intent sheet management, completion with document proof
+  - `services/preventiveIntentSheet.ts` — task/reminder generation from selected preventive items
+  - `services/preventiveBriefing.ts` — Home screen briefing items
+  - `hooks/usePreventive.ts` — all TanStack Query hooks
+  - Screens: `app/(main)/preventive/` — index (dashboard grouped by status), `[id]` (item detail with rule explanation, missing-data prompts, mark complete, defer/decline), intent-review (Intent Sheet review + commit)
+- **Patterns established**:
+  - Deterministic eligibility engine (no AI) evaluates profile facts against rule criteria
+  - Status model: `due` → `due_soon` → `scheduled` → `completed` → `up_to_date`, plus `needs_review`, `deferred`, `declined`
+  - Missing-data prompts update profile facts and re-run eligibility
+  - Intent Sheet pattern: select items → review proposed tasks → confirm → tasks created
+  - Document-backed completion: upload proof → AI extracts date → user confirms
+  - Items with cadence auto-calculate `next_due_date` on completion
+  - `deferred` / `declined` are user choices the engine respects (never overrides)
+
+### Phase 2: Remaining Candidates
+- [x] Bills & EOBs module — COMPLETE
+- [x] Results (labs/imaging) — COMPLETE
+- [x] Preventive Care — COMPLETE
+- [ ] Voice Retrieval ("Ask Profile") — NEXT
+- [ ] Calling Agent — PLANNED
+- [ ] During-Visit Capture — PLANNED
+- [ ] Analytics & Dashboards — PLANNED
+- [ ] Email Intake — PLANNED
+- [ ] UI/UX polish pass across all screens — PLANNED
+- [ ] Performance optimization — PLANNED
+- [ ] App Store preparation — PLANNED
