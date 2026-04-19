@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -10,19 +10,28 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useTaskDetail,
+  useTasks,
   useUpdateTaskStatus,
   useUpdateTask,
   useTaskChain,
   useHouseholdMembers,
 } from '@/hooks/useTasks';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
+import { SmartSnoozeSheet } from '@/components/SmartSnoozeSheet';
+import { snoozeTask } from '@/services/taskSnooze';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
-import type { TaskPriority, TaskStatus, Task } from '@/lib/types/tasks';
+import type {
+  TaskPriority,
+  TaskStatus,
+  TaskSourceType,
+} from '@/lib/types/tasks';
 import { PRIORITY_LABELS } from '@/lib/types/tasks';
 
 const PRIORITY_COLORS: Record<TaskPriority, string> = {
@@ -50,6 +59,24 @@ const TRIGGER_LABELS: Record<string, string> = {
 
 const PRIORITIES: TaskPriority[] = ['urgent', 'high', 'medium', 'low'];
 
+const SOURCE_ROUTES: Record<TaskSourceType, (id: string) => string> = {
+  manual: () => '/(main)/(tabs)/tasks',
+  intent_sheet: (id) => `/(main)/intent-sheet/${id}`,
+  appointment: (id) => `/(main)/appointments/${id}`,
+  medication: (id) => `/(main)/medications/${id}`,
+  billing: (id) => `/(main)/billing/${id}`,
+  preventive: (id) => `/(main)/preventive/${id}`,
+};
+
+const SOURCE_CTA: Record<TaskSourceType, string> = {
+  manual: 'View tasks',
+  intent_sheet: 'Open document review',
+  appointment: 'Open appointment',
+  medication: 'Open medication',
+  billing: 'Open bill',
+  preventive: 'Open screening',
+};
+
 export default function TaskDetailScreen() {
   const { taskId } = useLocalSearchParams<{ taskId: string }>();
   const router = useRouter();
@@ -64,10 +91,47 @@ export default function TaskDetailScreen() {
   // Fetch household members for assignment
   const { data: members } = useHouseholdMembers(activeProfile?.household_id ?? null);
 
+  // Related tasks — anything else with the same (source_type, source_ref).
+  // Used to show "Related tasks" when this task is part of a bundle.
+  const { data: profileTasks } = useTasks(task?.profile_id ?? null);
+  const relatedTasks = useMemo(() => {
+    if (!task || !task.source_ref || !profileTasks) return [];
+    return profileTasks.filter(
+      (t) =>
+        t.id !== task.id &&
+        t.source_type === task.source_type &&
+        t.source_ref === task.source_ref,
+    );
+  }, [task, profileTasks]);
+
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [editPriority, setEditPriority] = useState<TaskPriority>('medium');
+  const [snoozeOpen, setSnoozeOpen] = useState(false);
+
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+
+  const handleSnooze = async (isoTarget: string) => {
+    if (!task || !user?.id) return;
+    setSnoozeOpen(false);
+    const result = await snoozeTask(task.id, isoTarget, user.id);
+    if (!result.success) {
+      Alert.alert("Couldn't snooze", result.error);
+      return;
+    }
+    queryClient.invalidateQueries({ queryKey: ['tasks', 'detail', task.id] });
+    queryClient.invalidateQueries({ queryKey: ['tasks', 'list', task.profile_id] });
+    router.back();
+  };
+
+  const handleMarkIrrelevant = () => {
+    if (!task) return;
+    setSnoozeOpen(false);
+    updateStatus.mutate({ taskId: task.id, status: 'dismissed' });
+    router.back();
+  };
 
   const startEditing = () => {
     if (!task) return;
@@ -267,6 +331,28 @@ export default function TaskDetailScreen() {
         {/* Trigger source */}
         {task.trigger_source && (
           <Text style={styles.triggerSourceText}>{task.trigger_source}</Text>
+        )}
+
+        {/* Source CTA — link to originating module */}
+        {task.source_ref && task.source_type !== 'manual' && (
+          <TouchableOpacity
+            style={styles.sourceCta}
+            activeOpacity={0.8}
+            onPress={() =>
+              router.push(
+                SOURCE_ROUTES[task.source_type](task.source_ref!) as never,
+              )
+            }
+          >
+            <Text style={styles.sourceCtaText}>
+              {SOURCE_CTA[task.source_type]}
+            </Text>
+            <Ionicons
+              name="chevron-forward"
+              size={16}
+              color={COLORS.primary.DEFAULT}
+            />
+          </TouchableOpacity>
         )}
 
         {/* Details section */}
@@ -559,6 +645,56 @@ export default function TaskDetailScreen() {
           </View>
         )}
 
+        {/* Related tasks (same source) */}
+        {relatedTasks.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Related tasks</Text>
+            {relatedTasks.map((rt) => {
+              const rtDone =
+                rt.status === 'completed' || rt.status === 'dismissed';
+              return (
+                <TouchableOpacity
+                  key={rt.id}
+                  style={styles.relatedRow}
+                  onPress={() => router.push(`/(main)/tasks/${rt.id}`)}
+                >
+                  <Ionicons
+                    name={
+                      rtDone
+                        ? rt.status === 'completed'
+                          ? 'checkmark-circle'
+                          : 'close-circle'
+                        : 'ellipse-outline'
+                    }
+                    size={18}
+                    color={
+                      rt.status === 'completed'
+                        ? COLORS.success.DEFAULT
+                        : rt.status === 'dismissed'
+                          ? COLORS.text.tertiary
+                          : COLORS.primary.DEFAULT
+                    }
+                  />
+                  <Text
+                    style={[
+                      styles.relatedTitle,
+                      rtDone && styles.relatedTitleDone,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {rt.title}
+                  </Text>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={14}
+                    color={COLORS.text.tertiary}
+                  />
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
         {/* Timeline section */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Timeline</Text>
@@ -636,6 +772,12 @@ export default function TaskDetailScreen() {
                 />
                 <View style={styles.actionSpacer} />
                 <Button
+                  title="Remind Me Later"
+                  onPress={() => setSnoozeOpen(true)}
+                  variant="outline"
+                />
+                <View style={styles.actionSpacer} />
+                <Button
                   title="Dismiss"
                   onPress={() => handleStatusChange('dismissed')}
                   variant="ghost"
@@ -645,6 +787,14 @@ export default function TaskDetailScreen() {
           </View>
         )}
       </ScrollView>
+
+      <SmartSnoozeSheet
+        visible={snoozeOpen}
+        task={task}
+        onDismiss={() => setSnoozeOpen(false)}
+        onSnooze={handleSnooze}
+        onMarkIrrelevant={handleMarkIrrelevant}
+      />
     </SafeAreaView>
   );
 }
@@ -1082,5 +1232,38 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.sm,
     color: COLORS.text.secondary,
     textAlign: 'center',
+  },
+  sourceCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    marginBottom: 20,
+  },
+  sourceCtaText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+    marginRight: 4,
+  },
+  relatedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border.light,
+  },
+  relatedTitle: {
+    flex: 1,
+    fontSize: FONT_SIZES.base,
+    color: COLORS.text.DEFAULT,
+  },
+  relatedTitleDone: {
+    color: COLORS.text.tertiary,
+    textDecorationLine: 'line-through',
   },
 });

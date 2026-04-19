@@ -140,6 +140,24 @@ export default function ProfileOverviewScreen() {
         />
       </TouchableOpacity>
 
+      <TouchableOpacity
+        style={styles.askProfileButton}
+        activeOpacity={0.8}
+        onPress={() => router.push(`/(main)/profile/${profileId}/priorities`)}
+      >
+        <Ionicons
+          name="heart-outline"
+          size={18}
+          color={COLORS.primary.DEFAULT}
+        />
+        <Text style={styles.askProfileText}>What matters to you</Text>
+        <Ionicons
+          name="chevron-forward"
+          size={16}
+          color={COLORS.primary.DEFAULT}
+        />
+      </TouchableOpacity>
+
       {/* Category Sections */}
       {PROFILE_FACT_CATEGORIES.map((category) => {
         const facts = grouped[category.key] ?? [];

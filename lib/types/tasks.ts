@@ -1,6 +1,11 @@
 // ── Task Types ─────────────────────────────────────────────────────────────
 
-export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'dismissed';
+export type TaskStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'completed'
+  | 'dismissed'
+  | 'expired';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 export type TaskSourceType = 'manual' | 'intent_sheet' | 'appointment' | 'medication' | 'billing' | 'preventive';
 export type TaskDependencyStatus = 'blocked' | 'ready';
@@ -53,6 +58,12 @@ export interface Task {
   next_recurrence_at: string | null;
   trigger_type: TaskTriggerType | null;
   trigger_source: string | null;
+  // Lifecycle columns
+  snoozed_count: number;
+  snoozed_at: string | null;
+  expired_at: string | null;
+  expired_reason: string | null;
+  personal_priority: number | null;
 }
 
 export interface CreateTaskParams {
@@ -148,3 +159,57 @@ export interface ProactiveSuggestion {
   context_json?: TaskContextJson;
   due_days?: number;
 }
+
+// ── Time Grouping ──────────────────────────────────────────────────────────
+
+export type TaskTimeGroup = 'today' | 'this_week' | 'when_ready';
+
+// ── Task Bundling ──────────────────────────────────────────────────────────
+
+/**
+ * Category filter chips on the task list. 'all' means no filter.
+ */
+export type TaskCategoryFilter =
+  | 'all'
+  | 'medications'
+  | 'appointments'
+  | 'billing'
+  | 'preventive'
+  | 'other';
+
+/**
+ * A grouping of tasks that share a source (e.g. one appointment, one bill).
+ * Bundles with a single task are rendered as individual tasks — bundling
+ * only kicks in when ≥2 related tasks exist.
+ */
+export interface TaskBundle {
+  id: string;
+  title: string;
+  sourceType: TaskSourceType;
+  sourceId: string;
+  sourceRoute: string;
+  tasks: Task[];
+  completedCount: number;
+  totalCount: number;
+  /** Highest priority (lowest PRIORITY_ORDER value) in the bundle. */
+  priority: TaskPriority;
+  /** Best personalized priority score across the bundle's open tasks. */
+  personalizedPriority: number;
+  nextDueDate: string | null;
+  /** Short description of where this bundle came from. */
+  contextLine: string;
+}
+
+/** A task decorated with its personalized priority score. */
+export interface PersonalizedTask extends Task {
+  personalizedPriority: number;
+  contextLine: string | null;
+}
+
+/**
+ * A single renderable row in the task list. Either a bundle (expandable)
+ * or an individual personalized task.
+ */
+export type TaskListEntry =
+  | { kind: 'bundle'; bundle: TaskBundle }
+  | { kind: 'task'; task: PersonalizedTask };

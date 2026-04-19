@@ -1,41 +1,78 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
+  Animated,
   View,
   Text,
   TouchableOpacity,
   FlatList,
   StyleSheet,
   Alert,
+  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Swipeable } from 'react-native-gesture-handler';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useQueryClient } from '@tanstack/react-query';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
-import { useTasks, useUpdateTaskStatus } from '@/hooks/useTasks';
+import { useAuth } from '@/hooks/useAuth';
+import { useUpdateTaskStatus } from '@/hooks/useTasks';
+import {
+  usePatientPriorities,
+  useImplicitSignalRefresh,
+} from '@/hooks/usePatientPriorities';
+import {
+  useTaskBundles,
+  filterBundlesByCategory,
+  filterTasksByCategory,
+} from '@/hooks/useTaskBundles';
+import { useTaskProgress } from '@/hooks/useTaskProgress';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Card } from '@/components/ui/Card';
+import { SmartSnoozeSheet } from '@/components/SmartSnoozeSheet';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
-import type { Task, TaskPriority, TaskStatus } from '@/lib/types/tasks';
-import { PRIORITY_ORDER, PRIORITY_LABELS } from '@/lib/types/tasks';
+import { buildListEntries, filterToSourceTypes } from '@/services/taskBundling';
+import { runExpiryScan } from '@/services/taskLifecycle';
+import { snoozeTask } from '@/services/taskSnooze';
+import type {
+  Task,
+  TaskCategoryFilter,
+  TaskTimeGroup,
+  TaskBundle,
+  PersonalizedTask,
+  TaskPriority,
+  TaskSourceType,
+  TaskStatus,
+} from '@/lib/types/tasks';
 
-// ── Types ──────────────────────────────────────────────────────────────────
+// ── Config ─────────────────────────────────────────────────────────────────
 
-type FilterTab = 'open' | 'completed' | 'all';
-type ViewMode = 'priority' | 'action_plan';
-type TimeFilter = 'all' | 'due_today' | 'overdue' | 'this_week';
+type StatusTab = 'open' | 'completed' | 'all';
 
-const FILTER_TABS: { key: FilterTab; label: string }[] = [
+const STATUS_TABS: { key: StatusTab; label: string }[] = [
   { key: 'open', label: 'Open' },
   { key: 'completed', label: 'Completed' },
   { key: 'all', label: 'All' },
 ];
 
-const TIME_FILTERS: { key: TimeFilter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'due_today', label: 'Due Today' },
-  { key: 'overdue', label: 'Overdue' },
-  { key: 'this_week', label: 'This Week' },
+const CATEGORY_FILTERS: { key: TaskCategoryFilter; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { key: 'all', label: 'All', icon: 'apps-outline' },
+  { key: 'medications', label: 'Medications', icon: 'medkit-outline' },
+  { key: 'appointments', label: 'Appointments', icon: 'calendar-outline' },
+  { key: 'billing', label: 'Bills', icon: 'receipt-outline' },
+  { key: 'preventive', label: 'Preventive', icon: 'shield-checkmark-outline' },
+  { key: 'other', label: 'Other', icon: 'ellipsis-horizontal' },
+];
+
+const TIME_GROUP_CONFIG: {
+  key: TaskTimeGroup;
+  label: string;
+  description: string;
+}[] = [
+  { key: 'today', label: 'Today', description: 'Due today or overdue' },
+  { key: 'this_week', label: 'This Week', description: 'Due in the next 7 days' },
+  { key: 'when_ready', label: "When You're Ready", description: 'No rush' },
 ];
 
 const PRIORITY_COLORS: Record<TaskPriority, string> = {
@@ -45,61 +82,25 @@ const PRIORITY_COLORS: Record<TaskPriority, string> = {
   low: COLORS.secondary.DEFAULT,
 };
 
-const TRIGGER_LABELS: Record<string, string> = {
-  manual: 'Manual',
-  extraction: 'AI Suggested',
-  proactive: 'Proactive',
-  time_based: 'Recurring',
-  chain: 'Action Plan',
+const SOURCE_ICONS: Record<TaskSourceType, keyof typeof Ionicons.glyphMap> = {
+  manual: 'create-outline',
+  intent_sheet: 'document-text-outline',
+  appointment: 'calendar-outline',
+  medication: 'medkit-outline',
+  billing: 'receipt-outline',
+  preventive: 'shield-checkmark-outline',
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function getStatusFilter(tab: FilterTab): TaskStatus[] | undefined {
-  switch (tab) {
-    case 'open':
-      return ['pending', 'in_progress'];
-    case 'completed':
-      return ['completed', 'dismissed'];
-    case 'all':
-      return undefined;
-  }
-}
-
-function isOverdue(task: Task): boolean {
-  if (!task.due_date) return false;
-  if (task.status === 'completed' || task.status === 'dismissed') return false;
-  return new Date(task.due_date) < new Date();
-}
-
-function isDueToday(task: Task): boolean {
-  if (!task.due_date) return false;
-  const due = new Date(task.due_date);
-  const now = new Date();
-  return (
-    due.getDate() === now.getDate() &&
-    due.getMonth() === now.getMonth() &&
-    due.getFullYear() === now.getFullYear()
-  );
-}
-
-function isDueThisWeek(task: Task): boolean {
-  if (!task.due_date) return false;
-  const due = new Date(task.due_date);
-  const now = new Date();
-  const endOfWeek = new Date(now);
-  endOfWeek.setDate(endOfWeek.getDate() + (7 - endOfWeek.getDay()));
-  endOfWeek.setHours(23, 59, 59, 999);
-  return due <= endOfWeek;
-}
-
-function formatDueDate(dateStr: string, taskStatus?: TaskStatus): string {
+function formatDueDate(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const diffDays = Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-
+  const diffDays = Math.round(
+    (target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
+  );
   if (diffDays === 0) return 'Today';
   if (diffDays === 1) return 'Tomorrow';
   if (diffDays === -1) return 'Yesterday';
@@ -108,138 +109,126 @@ function formatDueDate(dateStr: string, taskStatus?: TaskStatus): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-function getChainLabel(task: Task): string | null {
-  if (!task.parent_task_id || !task.chain_order) return null;
-  return `Step ${task.chain_order}`;
+function isOverdue(dueDate: string | null): boolean {
+  if (!dueDate) return false;
+  return new Date(dueDate) < new Date();
 }
 
-// ── Action Plan Group ──────────────────────────────────────────────────────
-
-interface ActionPlanGroup {
-  id: string;
-  name: string;
-  tasks: Task[];
-  completedCount: number;
-  totalCount: number;
-  nextStep: Task | null;
-  isExpanded: boolean;
+function ctaForTask(task: PersonalizedTask): string | null {
+  if (task.status !== 'pending' && task.status !== 'in_progress') return null;
+  const ctx = task.context_json;
+  if (ctx?.call_script || ctx?.contact_info?.phone) return 'Call script ready';
+  if (task.source_type === 'preventive') return 'Schedule now';
+  if (task.source_type === 'billing') return 'Open bill';
+  if (task.source_type === 'appointment') return 'View appointment';
+  if (task.source_type === 'medication') return 'View medication';
+  return null;
 }
 
-// ── Priority Group ─────────────────────────────────────────────────────────
-
-interface PriorityGroup {
-  priority: TaskPriority;
-  tasks: Task[];
-}
-
-function groupByPriority(tasks: Task[]): PriorityGroup[] {
-  const groups: Partial<Record<TaskPriority, Task[]>> = {};
-
-  for (const task of tasks) {
-    if (!groups[task.priority]) groups[task.priority] = [];
-    groups[task.priority]!.push(task);
-  }
-
-  return Object.entries(groups)
-    .sort(([a], [b]) => PRIORITY_ORDER[a as TaskPriority] - PRIORITY_ORDER[b as TaskPriority])
-    .map(([priority, groupTasks]) => ({
-      priority: priority as TaskPriority,
-      tasks: groupTasks!,
-    }));
-}
-
-// ── Main Component ─────────────────────────────────────────────────────────
+// ── Screen ─────────────────────────────────────────────────────────────────
 
 export default function TasksScreen() {
-  const [activeTab, setActiveTab] = useState<FilterTab>('open');
-  const [viewMode, setViewMode] = useState<ViewMode>('priority');
-  const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
-  const [expandedChains, setExpandedChains] = useState<Set<string>>(new Set());
-  const { activeProfileId } = useActiveProfile();
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const { activeProfileId, activeProfile } = useActiveProfile();
+  const { user } = useAuth();
+  const [statusTab, setStatusTab] = useState<StatusTab>('open');
+  const [category, setCategory] = useState<TaskCategoryFilter>('all');
+  const [expandedBundles, setExpandedBundles] = useState<Set<string>>(new Set());
+  const [whenReadyExpanded, setWhenReadyExpanded] = useState(false);
+  const [snoozeTarget, setSnoozeTarget] = useState<Task | null>(null);
+  const [celebration, setCelebration] = useState<{
+    taskId: string;
+    bundleTitle: string | null;
+  } | null>(null);
+  const celebrationAnim = useRef(new Animated.Value(0)).current;
 
-  const statusFilter = getStatusFilter(activeTab);
-  const filter = statusFilter ? { status: statusFilter } : undefined;
+  useImplicitSignalRefresh(activeProfileId);
 
-  const { data: tasks, isLoading, error, refetch } = useTasks(activeProfileId, filter);
+  // Run expiry scan once per profile mount — background, best-effort.
+  const expiryScanRanRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeProfileId || !user?.id) return;
+    if (expiryScanRanRef.current === activeProfileId) return;
+    expiryScanRanRef.current = activeProfileId;
+    (async () => {
+      const result = await runExpiryScan(activeProfileId, user.id);
+      if (result.success && result.data > 0) {
+        queryClient.invalidateQueries({ queryKey: ['tasks', 'list', activeProfileId] });
+      }
+    })();
+  }, [activeProfileId, user?.id, queryClient]);
+
+  const { data: priorities } = usePatientPriorities(activeProfileId);
+  const { data: progress } = useTaskProgress(activeProfileId);
+
+  const statusFilter = useMemo<TaskStatus[] | undefined>(() => {
+    if (statusTab === 'open') return ['pending', 'in_progress'];
+    if (statusTab === 'completed') return ['completed', 'dismissed', 'expired'];
+    return undefined;
+  }, [statusTab]);
+
+  const { bundles, individuals, fatigueNote, isLoading, error } = useTaskBundles(
+    activeProfileId,
+    statusFilter ? { status: statusFilter } : undefined,
+  );
+
   const updateStatus = useUpdateTaskStatus();
 
-  // Apply time filter
-  const filteredTasks = useMemo(() => {
-    if (!tasks) return [];
-    switch (timeFilter) {
-      case 'due_today':
-        return tasks.filter((t) => isDueToday(t) || isOverdue(t));
-      case 'overdue':
-        return tasks.filter(isOverdue);
-      case 'this_week':
-        return tasks.filter((t) => isDueThisWeek(t) || isOverdue(t));
-      default:
-        return tasks;
-    }
-  }, [tasks, timeFilter]);
+  // Apply category filter
+  const { filteredBundles, filteredIndividuals } = useMemo(() => {
+    const sourceTypes = filterToSourceTypes(category);
+    return {
+      filteredBundles: filterBundlesByCategory(bundles, sourceTypes),
+      filteredIndividuals: filterTasksByCategory(individuals, sourceTypes),
+    };
+  }, [bundles, individuals, category]);
 
-  // Build action plan groups
-  const { actionPlans, individualTasks } = useMemo(() => {
-    const chainMap = new Map<string, Task[]>();
-    const individuals: Task[] = [];
+  const totalCount = filteredBundles.length + filteredIndividuals.length;
 
-    for (const task of filteredTasks) {
-      if (task.parent_task_id) {
-        const key = task.parent_task_id;
-        if (!chainMap.has(key)) chainMap.set(key, []);
-        chainMap.get(key)!.push(task);
-      } else {
-        const children = filteredTasks.filter((t) => t.parent_task_id === task.id);
-        if (children.length > 0) {
-          const key = task.id;
-          if (!chainMap.has(key)) chainMap.set(key, []);
-          chainMap.get(key)!.unshift(task);
-        } else {
-          individuals.push(task);
-        }
-      }
-    }
-
-    const plans: ActionPlanGroup[] = [];
-    for (const [parentId, chainTasks] of chainMap) {
-      const sorted = chainTasks.sort((a, b) => (a.chain_order ?? 0) - (b.chain_order ?? 0));
-      const completed = sorted.filter((t) => t.status === 'completed').length;
-      const next = sorted.find(
-        (t) => t.status === 'pending' || t.status === 'in_progress',
-      ) ?? null;
-
-      const triggerSource = sorted[0]?.trigger_source ?? '';
-      plans.push({
-        id: parentId,
-        name: triggerSource || 'Action Plan',
-        tasks: sorted,
-        completedCount: completed,
-        totalCount: sorted.length,
-        nextStep: next,
-        isExpanded: expandedChains.has(parentId),
-      });
-    }
-
-    return { actionPlans: plans, individualTasks: individuals };
-  }, [filteredTasks, expandedChains]);
-
-  const groups = useMemo(() => groupByPriority(filteredTasks), [filteredTasks]);
-
-  const toggleChainExpanded = useCallback((chainId: string) => {
-    setExpandedChains((prev) => {
-      const next = new Set(prev);
-      if (next.has(chainId)) next.delete(chainId);
-      else next.add(chainId);
-      return next;
-    });
-  }, []);
+  // Celebration animation: subtle scale-in, hold, fade-out.
+  const triggerCelebration = useCallback(
+    (taskId: string, bundleTitle: string | null) => {
+      setCelebration({ taskId, bundleTitle });
+      celebrationAnim.setValue(0);
+      Animated.sequence([
+        Animated.spring(celebrationAnim, {
+          toValue: 1,
+          friction: 6,
+          useNativeDriver: true,
+        }),
+        Animated.delay(bundleTitle ? 2000 : 900),
+        Animated.timing(celebrationAnim, {
+          toValue: 0,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+      ]).start(() => setCelebration(null));
+    },
+    [celebrationAnim],
+  );
 
   const handleComplete = useCallback(
     (taskId: string) => {
+      // Before firing the mutation, check whether this completion finishes a bundle
+      const containingBundle = bundles.find((b) =>
+        b.tasks.some((t) => t.id === taskId),
+      );
+      const isFinalInBundle =
+        !!containingBundle &&
+        containingBundle.tasks.filter(
+          (t) =>
+            t.id !== taskId &&
+            (t.status === 'pending' || t.status === 'in_progress'),
+        ).length === 0;
+
+      triggerCelebration(
+        taskId,
+        isFinalInBundle && containingBundle ? containingBundle.title : null,
+      );
       updateStatus.mutate({ taskId, status: 'completed' });
     },
-    [updateStatus],
+    [bundles, triggerCelebration, updateStatus],
   );
 
   const handleDismiss = useCallback(
@@ -256,109 +245,103 @@ export default function TasksScreen() {
     [updateStatus],
   );
 
-  const renderRightActions = useCallback(
-    (taskId: string) => (
-      <TouchableOpacity
-        style={styles.swipeDismiss}
-        onPress={() => handleDismiss(taskId)}
-      >
-        <Text style={styles.swipeText}>Dismiss</Text>
-      </TouchableOpacity>
-    ),
-    [handleDismiss],
+  const handleSnooze = useCallback(
+    async (isoTarget: string) => {
+      if (!snoozeTarget || !user?.id) return;
+      const id = snoozeTarget.id;
+      setSnoozeTarget(null);
+      const result = await snoozeTask(id, isoTarget, user.id);
+      if (!result.success) {
+        Alert.alert("Couldn't snooze", result.error);
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ['tasks', 'list', activeProfileId] });
+    },
+    [snoozeTarget, user?.id, queryClient, activeProfileId],
   );
 
-  const renderLeftActions = useCallback(
-    (taskId: string) => (
-      <TouchableOpacity
-        style={styles.swipeComplete}
-        onPress={() => handleComplete(taskId)}
-      >
-        <Text style={styles.swipeText}>Complete</Text>
-      </TouchableOpacity>
-    ),
-    [handleComplete],
-  );
+  const handleMarkIrrelevant = useCallback(() => {
+    if (!snoozeTarget) return;
+    const id = snoozeTarget.id;
+    setSnoozeTarget(null);
+    updateStatus.mutate({ taskId: id, status: 'dismissed' });
+  }, [snoozeTarget, updateStatus]);
+
+  const toggleBundle = useCallback((id: string) => {
+    setExpandedBundles((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // ── Render task card ─────────────────────────────────────────────────────
 
   const renderTaskCard = useCallback(
-    (task: Task) => {
-      const overdue = isOverdue(task);
+    (task: PersonalizedTask, compact = false) => {
       const isOpen = task.status === 'pending' || task.status === 'in_progress';
       const isBlocked = task.dependency_status === 'blocked';
-      const chainLabel = getChainLabel(task);
-      const triggerLabel = task.trigger_type ? TRIGGER_LABELS[task.trigger_type] : null;
+      const overdue = isOverdue(task.due_date) && isOpen;
+      const cta = ctaForTask(task);
 
       const cardContent = (
         <Card
           onPress={() => router.push(`/(main)/tasks/${task.id}`)}
-          style={isBlocked ? { ...styles.taskCard, ...styles.taskCardBlocked } : styles.taskCard}
+          style={
+            compact
+              ? { ...styles.taskCard, ...styles.taskCardCompact }
+              : isBlocked
+                ? { ...styles.taskCard, ...styles.taskCardBlocked }
+                : styles.taskCard
+          }
         >
           <View style={styles.taskRow}>
-            <View style={styles.taskContent}>
-              <View style={styles.taskHeader}>
-                <Text
-                  style={[
-                    styles.taskTitle,
-                    (task.status === 'completed' || task.status === 'dismissed') &&
-                      styles.taskTitleDone,
-                    isBlocked && styles.taskTitleBlocked,
-                  ]}
-                  numberOfLines={1}
-                >
-                  {task.title}
-                </Text>
-              </View>
+            <View style={styles.sourceIconWrap}>
+              <Ionicons
+                name={SOURCE_ICONS[task.source_type]}
+                size={compact ? 14 : 18}
+                color={COLORS.primary.DEFAULT}
+              />
+            </View>
 
-              {task.description && (
-                <Text style={styles.taskDescription} numberOfLines={1}>
-                  {task.description}
+            <View style={styles.taskContent}>
+              <Text
+                style={[
+                  compact ? styles.taskTitleCompact : styles.taskTitle,
+                  !isOpen && styles.taskTitleDone,
+                  isBlocked && styles.taskTitleBlocked,
+                ]}
+                numberOfLines={compact ? 1 : 2}
+              >
+                {task.title}
+              </Text>
+
+              {!compact && task.contextLine && (
+                <Text style={styles.contextLine} numberOfLines={1}>
+                  {task.contextLine}
                 </Text>
               )}
 
               <View style={styles.taskMeta}>
-                <View
-                  style={[
-                    styles.badge,
-                    { backgroundColor: PRIORITY_COLORS[task.priority] + '1A' },
-                  ]}
-                >
+                {task.due_date && (
                   <Text
-                    style={[styles.badgeText, { color: PRIORITY_COLORS[task.priority] }]}
+                    style={[styles.dueDate, overdue && styles.dueDateOverdue]}
                   >
-                    {PRIORITY_LABELS[task.priority]}
+                    {formatDueDate(task.due_date)}
                   </Text>
-                </View>
-
-                {triggerLabel && triggerLabel !== 'Manual' && (
-                  <View style={[styles.badge, styles.triggerBadge]}>
-                    <Text style={styles.triggerBadgeText}>{triggerLabel}</Text>
+                )}
+                {!compact && cta && (
+                  <View style={styles.ctaChip}>
+                    <Text style={styles.ctaChipText}>{cta}</Text>
                   </View>
                 )}
-
-                {chainLabel && (
-                  <View style={[styles.badge, styles.chainBadge]}>
-                    <Text style={styles.chainBadgeText}>{chainLabel}</Text>
-                  </View>
-                )}
-
                 {isBlocked && (
-                  <View style={[styles.badge, styles.blockedBadge]}>
+                  <View style={styles.blockedBadge}>
                     <Text style={styles.blockedBadgeText}>Blocked</Text>
                   </View>
                 )}
-
-                {task.due_date && (
-                  <Text style={[styles.dueDate, overdue && styles.dueDateOverdue]}>
-                    {formatDueDate(task.due_date, task.status)}
-                  </Text>
-                )}
               </View>
-
-              {task.trigger_source && (
-                <Text style={styles.triggerSource} numberOfLines={1}>
-                  {task.trigger_source}
-                </Text>
-              )}
             </View>
 
             {isOpen && !isBlocked && (
@@ -371,17 +354,17 @@ export default function TasksScreen() {
               </TouchableOpacity>
             )}
 
-            {isOpen && isBlocked && (
-              <View style={styles.blockedLock}>
-                <Text style={styles.blockedLockText}>&#x1F512;</Text>
-              </View>
-            )}
-
             {!isOpen && (
               <View style={styles.doneIndicator}>
-                <Text style={styles.doneCheck}>
-                  {task.status === 'completed' ? '\u2713' : '\u2715'}
-                </Text>
+                <Ionicons
+                  name={task.status === 'completed' ? 'checkmark' : 'close'}
+                  size={14}
+                  color={
+                    task.status === 'completed'
+                      ? COLORS.success.DEFAULT
+                      : COLORS.text.tertiary
+                  }
+                />
               </View>
             )}
           </View>
@@ -393,8 +376,31 @@ export default function TasksScreen() {
       return (
         <Swipeable
           key={task.id}
-          renderLeftActions={() => renderLeftActions(task.id)}
-          renderRightActions={() => renderRightActions(task.id)}
+          renderLeftActions={() => (
+            <TouchableOpacity
+              style={styles.swipeComplete}
+              onPress={() => handleComplete(task.id)}
+            >
+              <Text style={styles.swipeText}>Complete</Text>
+            </TouchableOpacity>
+          )}
+          renderRightActions={() => (
+            <View style={styles.swipeRightRow}>
+              <TouchableOpacity
+                style={styles.swipeSnooze}
+                onPress={() => setSnoozeTarget(task)}
+              >
+                <Ionicons name="time-outline" size={18} color={COLORS.text.inverse} />
+                <Text style={styles.swipeText}>Snooze</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.swipeDismiss}
+                onPress={() => handleDismiss(task.id)}
+              >
+                <Text style={styles.swipeText}>Dismiss</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           overshootLeft={false}
           overshootRight={false}
         >
@@ -402,103 +408,147 @@ export default function TasksScreen() {
         </Swipeable>
       );
     },
-    [router, handleComplete, renderLeftActions, renderRightActions],
+    [router, handleComplete, handleDismiss],
   );
 
-  // ── Action Plan card renderer ──────────────────────────────────────────
+  // ── Render bundle card ───────────────────────────────────────────────────
 
-  const renderActionPlan = useCallback(
-    (plan: ActionPlanGroup) => {
-      const progress = plan.totalCount > 0
-        ? Math.round((plan.completedCount / plan.totalCount) * 100)
-        : 0;
+  const renderBundleCard = useCallback(
+    (bundle: TaskBundle, group: TaskTimeGroup) => {
+      const isExpanded = expandedBundles.has(bundle.id);
+      const tasksForGroup = bundle.tasks.filter((t) => {
+        // Only show tasks matching the current time group; fall back to all
+        // open tasks if nothing matches (should be rare).
+        const open = t.status === 'pending' || t.status === 'in_progress';
+        return open;
+      });
+      const progress =
+        bundle.totalCount > 0
+          ? Math.round((bundle.completedCount / bundle.totalCount) * 100)
+          : 0;
 
       return (
-        <View key={plan.id} style={styles.actionPlanContainer}>
+        <View key={bundle.id} style={styles.bundleContainer}>
           <TouchableOpacity
-            style={styles.actionPlanHeader}
-            onPress={() => toggleChainExpanded(plan.id)}
+            style={styles.bundleHeader}
+            onPress={() => toggleBundle(bundle.id)}
             activeOpacity={0.7}
           >
-            <View style={styles.actionPlanTitleRow}>
-              <Text style={styles.actionPlanName} numberOfLines={1}>
-                {plan.name}
-              </Text>
-              <Text style={styles.actionPlanChevron}>
-                {plan.isExpanded ? '\u25B2' : '\u25BC'}
-              </Text>
+            <View style={styles.bundleIconWrap}>
+              <Ionicons
+                name={SOURCE_ICONS[bundle.sourceType]}
+                size={18}
+                color={COLORS.primary.DEFAULT}
+              />
             </View>
-            <View style={styles.actionPlanProgressRow}>
-              <View style={styles.actionPlanProgressBar}>
-                <View
-                  style={[
-                    styles.actionPlanProgressFill,
-                    { width: `${progress}%` },
-                  ]}
+            <View style={styles.bundleContent}>
+              <View style={styles.bundleTitleRow}>
+                <Text style={styles.bundleTitle} numberOfLines={1}>
+                  {bundle.title}
+                </Text>
+                <Ionicons
+                  name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                  size={16}
+                  color={COLORS.text.tertiary}
                 />
               </View>
-              <Text style={styles.actionPlanProgressText}>
-                {plan.completedCount} of {plan.totalCount} complete
-              </Text>
+              <View style={styles.bundleProgressRow}>
+                <View style={styles.bundleProgressBar}>
+                  <View
+                    style={[
+                      styles.bundleProgressFill,
+                      { width: `${progress}%` },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.bundleProgressText}>
+                  {bundle.completedCount} of {bundle.totalCount}
+                </Text>
+              </View>
+              {!isExpanded && bundle.nextDueDate && (
+                <Text
+                  style={[
+                    styles.bundleNextDue,
+                    isOverdue(bundle.nextDueDate) && styles.dueDateOverdue,
+                  ]}
+                >
+                  Next: {formatDueDate(bundle.nextDueDate)}
+                </Text>
+              )}
             </View>
-            {plan.nextStep && !plan.isExpanded && (
-              <Text style={styles.actionPlanNextStep} numberOfLines={1}>
-                Next: {plan.nextStep.title}
-              </Text>
-            )}
           </TouchableOpacity>
 
-          {plan.isExpanded && (
-            <View style={styles.actionPlanTasks}>
-              {plan.tasks.map((task) => renderTaskCard(task))}
+          {isExpanded && (
+            <View style={styles.bundleTasks}>
+              {tasksForGroup.map((t) => {
+                // Re-wrap as PersonalizedTask (bundle holds plain Task — but the
+                // shape is compatible for rendering; we just lack the score).
+                const pt: PersonalizedTask = {
+                  ...t,
+                  personalizedPriority: bundle.personalizedPriority,
+                  contextLine: null,
+                };
+                return renderTaskCard(pt, true);
+              })}
+              <TouchableOpacity
+                style={styles.bundleLink}
+                onPress={() => router.push(bundle.sourceRoute as never)}
+              >
+                <Text style={styles.bundleLinkText}>
+                  Open{' '}
+                  {bundle.sourceType === 'appointment'
+                    ? 'appointment'
+                    : bundle.sourceType === 'billing'
+                      ? 'bill'
+                      : bundle.sourceType === 'preventive'
+                        ? 'screening'
+                        : bundle.sourceType === 'medication'
+                          ? 'medication'
+                          : 'source'}
+                </Text>
+                <Ionicons
+                  name="chevron-forward"
+                  size={14}
+                  color={COLORS.primary.DEFAULT}
+                />
+              </TouchableOpacity>
             </View>
           )}
         </View>
       );
     },
-    [toggleChainExpanded, renderTaskCard],
+    [expandedBundles, toggleBundle, renderTaskCard, router],
   );
 
-  // ── Build list data ────────────────────────────────────────────────────
+  // ── Build data per section ───────────────────────────────────────────────
 
-  type ListItem =
-    | { type: 'header'; priority: TaskPriority }
-    | { type: 'action_plan'; plan: ActionPlanGroup }
-    | { type: 'individual_header' }
-    | { type: 'task'; task: Task };
+  const sections = useMemo(() => {
+    return TIME_GROUP_CONFIG.map((config) => {
+      const entries = buildListEntries(
+        filteredBundles,
+        filteredIndividuals,
+        config.key,
+      );
+      return { ...config, entries };
+    });
+  }, [filteredBundles, filteredIndividuals]);
 
-  const listData = useMemo((): ListItem[] => {
-    if (viewMode === 'action_plan') {
-      const items: ListItem[] = [];
+  const hasAnyContent = sections.some((s) => s.entries.length > 0);
 
-      for (const plan of actionPlans) {
-        items.push({ type: 'action_plan', plan });
-      }
+  // ── Render ────────────────────────────────────────────────────────────────
 
-      if (individualTasks.length > 0) {
-        if (actionPlans.length > 0) {
-          items.push({ type: 'individual_header' });
-        }
-        for (const task of individualTasks) {
-          items.push({ type: 'task', task });
-        }
-      }
-
-      return items;
-    }
-
-    // Priority view
-    const items: ListItem[] = [];
-
-    for (const group of groups) {
-      items.push({ type: 'header', priority: group.priority });
-      for (const task of group.tasks) {
-        items.push({ type: 'task', task });
-      }
-    }
-
-    return items;
-  }, [viewMode, groups, actionPlans, individualTasks]);
+  if (!activeProfileId) {
+    return (
+      <SafeAreaView style={styles.safeArea} edges={['top']}>
+        <View style={styles.titleContainer}>
+          <Text style={styles.screenTitle}>Tasks & Reminders</Text>
+        </View>
+        <View style={styles.centered}>
+          <Text style={styles.loadingText}>Select a profile to view tasks.</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -521,32 +571,48 @@ export default function TasksScreen() {
         </View>
         <View style={styles.centered}>
           <Text style={styles.errorText}>Failed to load tasks</Text>
-          <TouchableOpacity onPress={() => refetch()} style={styles.retryButton}>
-            <Text style={styles.retryText}>Tap to retry</Text>
-          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
   }
 
+  const weeklyCompleted = progress?.completedThisWeek ?? 0;
+  const weeklyProgressPct = Math.min(100, weeklyCompleted * 10); // 10 tasks = full bar
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <View style={styles.titleContainer}>
         <Text style={styles.screenTitle}>Tasks & Reminders</Text>
+        {progress && weeklyCompleted > 0 && (
+          <View style={styles.progressRow}>
+            <View style={styles.progressBar}>
+              <View
+                style={[styles.progressFill, { width: `${weeklyProgressPct}%` }]}
+              />
+            </View>
+            <Text style={styles.progressText}>
+              {weeklyCompleted} completed this week
+              {progress.streakDays >= 3 ? ` · ${progress.streakDays}d streak` : ''}
+            </Text>
+          </View>
+        )}
       </View>
 
-      {/* Status filter tabs */}
-      <View style={styles.filterBar}>
-        {FILTER_TABS.map((tab) => (
+      {/* Status tabs */}
+      <View style={styles.statusTabs}>
+        {STATUS_TABS.map((tab) => (
           <TouchableOpacity
             key={tab.key}
-            style={[styles.filterTab, activeTab === tab.key && styles.filterTabActive]}
-            onPress={() => setActiveTab(tab.key)}
+            style={[
+              styles.statusTab,
+              statusTab === tab.key && styles.statusTabActive,
+            ]}
+            onPress={() => setStatusTab(tab.key)}
           >
             <Text
               style={[
-                styles.filterTabText,
-                activeTab === tab.key && styles.filterTabTextActive,
+                styles.statusTabText,
+                statusTab === tab.key && styles.statusTabTextActive,
               ]}
             >
               {tab.label}
@@ -555,130 +621,221 @@ export default function TasksScreen() {
         ))}
       </View>
 
-      {/* Time filter chips */}
-      <View style={styles.chipBar}>
-        {TIME_FILTERS.map((chip) => (
+      {/* Dismissal-fatigue banner — one-time surfacing per session */}
+      {fatigueNote && statusTab === 'open' && (
+        <View style={styles.fatigueBanner}>
+          <Ionicons
+            name="information-circle-outline"
+            size={16}
+            color={COLORS.text.secondary}
+          />
+          <Text style={styles.fatigueBannerText}>{fatigueNote}</Text>
+        </View>
+      )}
+
+      {/* Category filter chips */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipScroll}
+        style={styles.chipBar}
+      >
+        {CATEGORY_FILTERS.map((f) => (
           <TouchableOpacity
-            key={chip.key}
-            style={[styles.chip, timeFilter === chip.key && styles.chipActive]}
-            onPress={() => setTimeFilter(chip.key)}
+            key={f.key}
+            style={[styles.chip, category === f.key && styles.chipActive]}
+            onPress={() => setCategory(f.key)}
           >
+            <Ionicons
+              name={f.icon}
+              size={14}
+              color={
+                category === f.key
+                  ? COLORS.primary.DEFAULT
+                  : COLORS.text.secondary
+              }
+              style={styles.chipIcon}
+            />
             <Text
               style={[
                 styles.chipText,
-                timeFilter === chip.key && styles.chipTextActive,
+                category === f.key && styles.chipTextActive,
               ]}
             >
-              {chip.label}
+              {f.label}
             </Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
 
-      {/* View toggle */}
-      <View style={styles.viewToggleBar}>
-        <TouchableOpacity
-          style={[styles.viewToggle, viewMode === 'priority' && styles.viewToggleActive]}
-          onPress={() => setViewMode('priority')}
-        >
-          <Text
-            style={[
-              styles.viewToggleText,
-              viewMode === 'priority' && styles.viewToggleTextActive,
-            ]}
+      {/* Priorities CTA — show if open tab, enough tasks, no priorities yet */}
+      {statusTab === 'open' &&
+        !priorities &&
+        totalCount >= 5 &&
+        activeProfile && (
+          <TouchableOpacity
+            style={styles.prioritiesCta}
+            activeOpacity={0.8}
+            onPress={() =>
+              router.push(`/(main)/profile/${activeProfile.id}/priorities` as never)
+            }
           >
-            By Priority
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.viewToggle, viewMode === 'action_plan' && styles.viewToggleActive]}
-          onPress={() => setViewMode('action_plan')}
-        >
-          <Text
-            style={[
-              styles.viewToggleText,
-              viewMode === 'action_plan' && styles.viewToggleTextActive,
-            ]}
-          >
-            By Action Plan
-          </Text>
-        </TouchableOpacity>
-      </View>
+            <View style={styles.prioritiesCtaIcon}>
+              <Ionicons name="heart-outline" size={20} color={COLORS.primary.DEFAULT} />
+            </View>
+            <View style={styles.prioritiesCtaContent}>
+              <Text style={styles.prioritiesCtaTitle}>What matters to you?</Text>
+              <Text style={styles.prioritiesCtaBody}>
+                Tell us what's most important so we can focus on it.
+              </Text>
+            </View>
+            <Ionicons
+              name="chevron-forward"
+              size={16}
+              color={COLORS.primary.DEFAULT}
+            />
+          </TouchableOpacity>
+        )}
 
-      {/* Task list */}
-      {listData.length === 0 ? (
+      {/* Empty state */}
+      {!hasAnyContent ? (
         <EmptyState
           title={
-            timeFilter !== 'all'
+            category !== 'all'
               ? 'No matching tasks'
-              : activeTab === 'open'
-                ? 'No open tasks'
+              : statusTab === 'open'
+                ? "You're all caught up"
                 : 'No tasks yet'
           }
           description={
-            timeFilter !== 'all'
-              ? 'Try changing your filter to see more tasks.'
-              : activeTab === 'open'
-                ? 'Create a task or process a document to generate action items.'
-                : 'Tasks will appear here as you capture and process health documents.'
+            category !== 'all'
+              ? 'Try another category to see more tasks.'
+              : statusTab === 'open'
+                ? 'Nothing needs your attention right now.'
+                : 'Tasks will appear here as you use CareLead.'
           }
-          actionTitle={activeTab === 'open' && timeFilter === 'all' ? 'Create Task' : undefined}
+          actionTitle={
+            statusTab === 'open' && category === 'all' ? 'Create Task' : undefined
+          }
           onAction={
-            activeTab === 'open' && timeFilter === 'all'
+            statusTab === 'open' && category === 'all'
               ? () => router.push('/(main)/tasks/create')
               : undefined
           }
         />
       ) : (
-        <FlatList<ListItem>
-          data={listData}
-          keyExtractor={(item) => {
-            if (item.type === 'header') return `header-${item.priority}`;
-            if (item.type === 'action_plan') return `plan-${item.plan.id}`;
-            if (item.type === 'individual_header') return 'individual-header';
-            return item.task.id;
-          }}
-          renderItem={({ item }) => {
-            switch (item.type) {
-              case 'header':
-                return (
-                  <View style={styles.sectionHeader}>
-                    <View
-                      style={[
-                        styles.sectionDot,
-                        { backgroundColor: PRIORITY_COLORS[item.priority] },
-                      ]}
-                    />
-                    <Text style={styles.sectionTitle}>
-                      {PRIORITY_LABELS[item.priority]} Priority
-                    </Text>
-                  </View>
-                );
-              case 'action_plan':
-                return renderActionPlan(item.plan);
-              case 'individual_header':
-                return (
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Individual Tasks</Text>
-                  </View>
-                );
-              case 'task':
-                return renderTaskCard(item.task);
-            }
-          }}
+        <FlatList
+          data={sections.filter((s) => s.entries.length > 0)}
+          keyExtractor={(s) => s.key}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          renderItem={({ item: section }) => {
+            const isWhenReady = section.key === 'when_ready';
+            const collapsed = isWhenReady && !whenReadyExpanded;
+
+            return (
+              <View style={styles.section}>
+                <TouchableOpacity
+                  style={styles.sectionHeader}
+                  onPress={
+                    isWhenReady
+                      ? () => setWhenReadyExpanded((v) => !v)
+                      : undefined
+                  }
+                  activeOpacity={isWhenReady ? 0.7 : 1}
+                  disabled={!isWhenReady}
+                >
+                  <View>
+                    <Text
+                      style={[
+                        styles.sectionTitle,
+                        section.key === 'today' && styles.sectionTitleToday,
+                      ]}
+                    >
+                      {section.label}
+                    </Text>
+                    <Text style={styles.sectionDescription}>
+                      {collapsed
+                        ? `${section.entries.length} ${
+                            section.entries.length === 1 ? 'item' : 'items'
+                          } when you're ready`
+                        : section.description}
+                    </Text>
+                  </View>
+                  <View style={styles.sectionCountWrap}>
+                    <Text style={styles.sectionCount}>
+                      {section.entries.length}
+                    </Text>
+                    {isWhenReady && (
+                      <Ionicons
+                        name={whenReadyExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={16}
+                        color={COLORS.text.tertiary}
+                        style={styles.sectionChevron}
+                      />
+                    )}
+                  </View>
+                </TouchableOpacity>
+
+                {!collapsed &&
+                  section.entries.map((entry) =>
+                    entry.kind === 'bundle'
+                      ? renderBundleCard(entry.bundle, section.key)
+                      : renderTaskCard(entry.task),
+                  )}
+              </View>
+            );
+          }}
         />
       )}
 
-      {/* Floating action button */}
       <TouchableOpacity
         style={styles.fab}
         activeOpacity={0.8}
         onPress={() => router.push('/(main)/tasks/create')}
       >
-        <Text style={styles.fabIcon}>+</Text>
+        <Ionicons name="add" size={28} color={COLORS.text.inverse} />
       </TouchableOpacity>
+
+      {/* Completion celebration overlay */}
+      {celebration && (
+        <Animated.View
+          style={[
+            styles.celebration,
+            {
+              opacity: celebrationAnim,
+              transform: [
+                {
+                  scale: celebrationAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.8, 1],
+                  }),
+                },
+              ],
+            },
+          ]}
+          pointerEvents="none"
+        >
+          <Ionicons
+            name="checkmark-circle"
+            size={48}
+            color={COLORS.success.DEFAULT}
+          />
+          {celebration.bundleTitle && (
+            <Text style={styles.celebrationText}>
+              All done! {celebration.bundleTitle} is complete.
+            </Text>
+          )}
+        </Animated.View>
+      )}
+
+      <SmartSnoozeSheet
+        visible={!!snoozeTarget}
+        task={snoozeTarget}
+        onDismiss={() => setSnoozeTarget(null)}
+        onSnooze={handleSnooze}
+        onMarkIrrelevant={handleMarkIrrelevant}
+      />
     </SafeAreaView>
   );
 }
@@ -714,48 +871,41 @@ const styles = StyleSheet.create({
     color: COLORS.error.DEFAULT,
     marginBottom: 8,
   },
-  retryButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-  },
-  retryText: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.primary.DEFAULT,
-    fontWeight: FONT_WEIGHTS.semibold,
-  },
-  // Filter bar
-  filterBar: {
+  statusTabs: {
     flexDirection: 'row',
     paddingHorizontal: 24,
     marginBottom: 8,
     gap: 8,
   },
-  filterTab: {
+  statusTab: {
     flex: 1,
     paddingVertical: 8,
     borderRadius: 8,
     backgroundColor: COLORS.surface.muted,
     alignItems: 'center',
   },
-  filterTabActive: {
+  statusTabActive: {
     backgroundColor: COLORS.primary.DEFAULT,
   },
-  filterTabText: {
+  statusTabText: {
     fontSize: FONT_SIZES.sm,
     fontWeight: FONT_WEIGHTS.medium,
     color: COLORS.text.secondary,
   },
-  filterTabTextActive: {
+  statusTabTextActive: {
     color: COLORS.text.inverse,
   },
-  // Time filter chips
   chipBar: {
-    flexDirection: 'row',
+    flexGrow: 0,
+    marginBottom: 12,
+  },
+  chipScroll: {
     paddingHorizontal: 24,
-    marginBottom: 8,
-    gap: 6,
+    gap: 8,
   },
   chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
@@ -764,8 +914,11 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border.light,
   },
   chipActive: {
-    backgroundColor: COLORS.primary.DEFAULT + '15',
+    backgroundColor: COLORS.primary.DEFAULT + '14',
     borderColor: COLORS.primary.DEFAULT,
+  },
+  chipIcon: {
+    marginRight: 6,
   },
   chipText: {
     fontSize: FONT_SIZES.xs,
@@ -776,80 +929,119 @@ const styles = StyleSheet.create({
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.semibold,
   },
-  // View toggle
-  viewToggleBar: {
+  // Priorities CTA
+  prioritiesCta: {
+    marginHorizontal: 24,
+    marginBottom: 12,
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: COLORS.secondary.DEFAULT + '14',
+    borderWidth: 1,
+    borderColor: COLORS.secondary.DEFAULT + '33',
     flexDirection: 'row',
-    paddingHorizontal: 24,
-    marginBottom: 16,
-    gap: 0,
-  },
-  viewToggle: {
-    flex: 1,
-    paddingVertical: 6,
     alignItems: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: COLORS.border.light,
   },
-  viewToggleActive: {
-    borderBottomColor: COLORS.primary.DEFAULT,
+  prioritiesCtaIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.surface.DEFAULT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
   },
-  viewToggleText: {
-    fontSize: FONT_SIZES.sm,
-    fontWeight: FONT_WEIGHTS.medium,
-    color: COLORS.text.tertiary,
+  prioritiesCtaContent: {
+    flex: 1,
   },
-  viewToggleTextActive: {
-    color: COLORS.primary.DEFAULT,
+  prioritiesCtaTitle: {
+    fontSize: FONT_SIZES.base,
     fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+    marginBottom: 2,
   },
-  // List content
+  prioritiesCtaBody: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+  },
+  // Sections
   listContent: {
     paddingHorizontal: 24,
     paddingBottom: 100,
   },
+  section: {
+    marginBottom: 20,
+  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  sectionDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 8,
+    justifyContent: 'space-between',
+    marginBottom: 10,
   },
   sectionTitle: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.text.DEFAULT,
+  },
+  sectionTitleToday: {
+    color: COLORS.primary.DEFAULT,
+  },
+  sectionDescription: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    marginTop: 2,
+  },
+  sectionCountWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  sectionCount: {
     fontSize: FONT_SIZES.sm,
     fontWeight: FONT_WEIGHTS.semibold,
     color: COLORS.text.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    minWidth: 22,
+    textAlign: 'right',
   },
-  // Task cards
+  sectionChevron: {
+    marginLeft: 4,
+  },
+  // Task card
   taskCard: {
     marginBottom: 8,
+  },
+  taskCardCompact: {
+    padding: 10,
+    marginBottom: 4,
   },
   taskCardBlocked: {
     opacity: 0.65,
   },
   taskRow: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  sourceIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
     alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+    marginTop: 2,
   },
   taskContent: {
     flex: 1,
-  },
-  taskHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 2,
   },
   taskTitle: {
     fontSize: FONT_SIZES.base,
     fontWeight: FONT_WEIGHTS.semibold,
     color: COLORS.text.DEFAULT,
-    flex: 1,
+    marginBottom: 2,
+  },
+  taskTitleCompact: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.DEFAULT,
   },
   taskTitleDone: {
     textDecorationLine: 'line-through',
@@ -858,9 +1050,9 @@ const styles = StyleSheet.create({
   taskTitleBlocked: {
     color: COLORS.text.secondary,
   },
-  taskDescription: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.text.secondary,
+  contextLine: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
     marginBottom: 6,
   },
   taskMeta: {
@@ -868,34 +1060,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexWrap: 'wrap',
     gap: 6,
-    marginTop: 4,
+    marginTop: 2,
   },
-  badge: {
+  dueDate: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    fontWeight: FONT_WEIGHTS.medium,
+  },
+  dueDateOverdue: {
+    color: COLORS.error.DEFAULT,
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
+  ctaChip: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,
-  },
-  badgeText: {
-    fontSize: FONT_SIZES.xs,
-    fontWeight: FONT_WEIGHTS.semibold,
-  },
-  triggerBadge: {
-    backgroundColor: COLORS.primary.DEFAULT + '15',
-  },
-  triggerBadgeText: {
-    fontSize: FONT_SIZES.xs,
-    fontWeight: FONT_WEIGHTS.semibold,
-    color: COLORS.primary.DEFAULT,
-  },
-  chainBadge: {
     backgroundColor: COLORS.accent.DEFAULT + '20',
   },
-  chainBadgeText: {
+  ctaChipText: {
     fontSize: FONT_SIZES.xs,
     fontWeight: FONT_WEIGHTS.semibold,
     color: COLORS.accent.dark,
   },
   blockedBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
     backgroundColor: COLORS.error.light,
   },
   blockedBadgeText: {
@@ -903,61 +1093,124 @@ const styles = StyleSheet.create({
     fontWeight: FONT_WEIGHTS.semibold,
     color: COLORS.error.DEFAULT,
   },
-  dueDate: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.text.secondary,
-  },
-  dueDateOverdue: {
-    color: COLORS.error.DEFAULT,
-    fontWeight: FONT_WEIGHTS.semibold,
-  },
-  triggerSource: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.text.tertiary,
-    marginTop: 3,
-    fontStyle: 'italic',
-  },
   checkButton: {
     padding: 4,
-    marginLeft: 12,
+    marginLeft: 8,
   },
   checkCircle: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     borderWidth: 2,
     borderColor: COLORS.border.dark,
   },
-  blockedLock: {
-    marginLeft: 12,
-    width: 24,
-    height: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  blockedLockText: {
-    fontSize: 16,
-  },
   doneIndicator: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: COLORS.success.light,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 12,
+    marginLeft: 8,
   },
-  doneCheck: {
-    fontSize: 14,
-    color: COLORS.success.DEFAULT,
-    fontWeight: FONT_WEIGHTS.bold,
+  // Bundle
+  bundleContainer: {
+    marginBottom: 10,
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border.light,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
+  bundleHeader: {
+    flexDirection: 'row',
+    padding: 14,
+  },
+  bundleIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  bundleContent: {
+    flex: 1,
+  },
+  bundleTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  bundleTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+    flex: 1,
+    marginRight: 8,
+  },
+  bundleProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  bundleProgressBar: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: COLORS.border.DEFAULT,
+    overflow: 'hidden',
+  },
+  bundleProgressFill: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: COLORS.success.DEFAULT,
+  },
+  bundleProgressText: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    fontWeight: FONT_WEIGHTS.medium,
+  },
+  bundleNextDue: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.primary.DEFAULT,
+    marginTop: 6,
+    fontWeight: FONT_WEIGHTS.medium,
+  },
+  bundleTasks: {
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border.light,
+    paddingTop: 10,
+  },
+  bundleLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    marginTop: 4,
+  },
+  bundleLinkText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+    marginRight: 4,
+  },
+  // Swipe
   swipeComplete: {
     backgroundColor: COLORS.success.DEFAULT,
     justifyContent: 'center',
     alignItems: 'center',
     width: 90,
-    borderRadius: 16,
+    borderRadius: 12,
     marginBottom: 8,
   },
   swipeDismiss: {
@@ -965,76 +1218,79 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     width: 90,
-    borderRadius: 16,
+    borderRadius: 12,
     marginBottom: 8,
+  },
+  swipeRightRow: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  swipeSnooze: {
+    backgroundColor: COLORS.accent.dark,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 80,
+    borderRadius: 12,
+    marginBottom: 8,
+    gap: 2,
   },
   swipeText: {
     color: COLORS.text.inverse,
     fontWeight: FONT_WEIGHTS.semibold,
     fontSize: FONT_SIZES.sm,
   },
-  // Action plan cards
-  actionPlanContainer: {
-    marginBottom: 12,
-    backgroundColor: COLORS.surface.DEFAULT,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border.light,
+  // Progress
+  progressRow: {
+    marginTop: 6,
+    gap: 4,
+  },
+  progressBar: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: COLORS.border.light,
     overflow: 'hidden',
   },
-  actionPlanHeader: {
-    padding: 14,
-  },
-  actionPlanTitleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  actionPlanName: {
-    fontSize: FONT_SIZES.base,
-    fontWeight: FONT_WEIGHTS.semibold,
-    color: COLORS.text.DEFAULT,
-    flex: 1,
-  },
-  actionPlanChevron: {
-    fontSize: 10,
-    color: COLORS.text.tertiary,
-    marginLeft: 8,
-  },
-  actionPlanProgressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  actionPlanProgressBar: {
-    flex: 1,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: COLORS.border.DEFAULT,
-    overflow: 'hidden',
-  },
-  actionPlanProgressFill: {
-    height: 6,
-    borderRadius: 3,
+  progressFill: {
+    height: 4,
+    borderRadius: 2,
     backgroundColor: COLORS.success.DEFAULT,
   },
-  actionPlanProgressText: {
+  progressText: {
     fontSize: FONT_SIZES.xs,
     color: COLORS.text.secondary,
-    fontWeight: FONT_WEIGHTS.medium,
   },
-  actionPlanNextStep: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.primary.DEFAULT,
-    marginTop: 6,
-    fontWeight: FONT_WEIGHTS.medium,
+  fatigueBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 8,
+    marginBottom: 8,
+    backgroundColor: COLORS.surface.muted,
   },
-  actionPlanTasks: {
-    paddingHorizontal: 10,
-    paddingBottom: 10,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border.light,
+  fatigueBannerText: {
+    flex: 1,
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+  },
+  // Celebration overlay
+  celebration: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.6)',
+  },
+  celebrationText: {
+    marginTop: 12,
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.success.DEFAULT,
+    textAlign: 'center',
+    paddingHorizontal: 32,
   },
   // FAB
   fab: {
@@ -1052,11 +1308,5 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 8,
-  },
-  fabIcon: {
-    fontSize: 28,
-    color: COLORS.text.inverse,
-    fontWeight: FONT_WEIGHTS.medium,
-    marginTop: -2,
   },
 });

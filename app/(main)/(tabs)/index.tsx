@@ -67,6 +67,16 @@ import {
 import type { CaregiverEnrichmentPrompt } from '@/lib/types/caregivers';
 import { useSmartEnrichment, getMilestone } from '@/hooks/useSmartEnrichment';
 import { SmartNudgeCard, MilestoneBadgeCard } from '@/components/SmartNudgeCard';
+import { DailyBriefingCard } from '@/components/DailyBriefingCard';
+import { buildDailyBriefing } from '@/services/dailyBriefing';
+import { usePatientPriorities } from '@/hooks/usePatientPriorities';
+import {
+  useTaskProgress,
+  useStreakCelebration,
+  useWeeklySummary,
+  dismissWeeklySummary,
+  dismissStreakCelebration,
+} from '@/hooks/useTaskProgress';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -177,6 +187,12 @@ export default function HomeScreen() {
     activeProfileId,
     activeProfile?.household_id ?? null,
   );
+
+  // Patient priorities + progress — powers the synthesized briefing
+  const { data: patientPriorities } = usePatientPriorities(activeProfileId);
+  const { data: progressStats } = useTaskProgress(activeProfileId);
+  const streakCelebration = useStreakCelebration(progressStats?.streakDays ?? 0);
+  const weeklySummary = useWeeklySummary(activeProfileId);
 
   // First-time caregiver → contribute screen. One-shot per user+profile.
   const caregiverRedirectRef = useRef<string | null>(null);
@@ -500,6 +516,33 @@ export default function HomeScreen() {
     day: 'numeric',
   });
 
+  // Synthesize the conversational daily briefing. Kept separate from the
+  // existing `briefing` memo so module-specific bullets remain below as
+  // supporting detail.
+  const dailyBriefing = useMemo(() => {
+    const firstName = activeProfile?.display_name?.split(' ')[0] ?? null;
+    const newMilestoneId = unseenMilestones[0];
+    const milestone = newMilestoneId ? getMilestone(newMilestoneId) : null;
+    return buildDailyBriefing({
+      firstName,
+      priorities: patientPriorities ?? null,
+      todaysDoses: todaysDoses ?? [],
+      upcomingAppointments: allAppointments ?? [],
+      openTasks: openTasks ?? [],
+      completedThisWeek: progressStats?.completedThisWeek ?? 0,
+      streakDays: progressStats?.streakDays ?? 0,
+      newMilestone: milestone ? { title: milestone.title } : null,
+    });
+  }, [
+    activeProfile,
+    patientPriorities,
+    todaysDoses,
+    allAppointments,
+    openTasks,
+    progressStats,
+    unseenMilestones,
+  ]);
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView
@@ -608,50 +651,104 @@ export default function HomeScreen() {
             </View>
           )}
 
-          {/* ZONE 2: TODAY'S BRIEFING CARD */}
+          {/* ZONE 2: DAILY BRIEFING CARD (synthesized) */}
           <View style={styles.zone}>
-            <TouchableOpacity
-              style={styles.briefingCard}
-              activeOpacity={0.7}
-              onPress={() => router.push('/(main)/today')}
-            >
-              <View style={styles.briefingAccent} />
-              <View style={styles.briefingContent}>
-                <View style={styles.briefingHeader}>
-                  <Text style={styles.briefingTitle}>Today's Briefing</Text>
-                  <Text style={styles.briefingDate}>{todayDateStr}</Text>
-                </View>
+            <DailyBriefingCard
+              briefing={dailyBriefing}
+              dateLabel={todayDateStr}
+              onViewDetails={() => router.push('/(main)/today')}
+              onAsk={() => router.push('/(main)/ask')}
+            />
+          </View>
 
-                {briefing.nothingDue ? (
-                  <>
-                    <View style={styles.briefingAllClear}>
-                      <Ionicons name="checkmark-circle" size={24} color={COLORS.success.DEFAULT} />
-                      <Text style={styles.briefingAllClearText}>
-                        All caught up — nothing due today
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.briefingAskPrompt}
-                      activeOpacity={0.7}
-                      onPress={(e) => {
-                        e.stopPropagation?.();
-                        router.push('/(main)/ask');
-                      }}
-                    >
-                      <Ionicons
-                        name="chatbubble-ellipses-outline"
-                        size={16}
-                        color={COLORS.primary.DEFAULT}
-                      />
-                      <Text style={styles.briefingAskPromptText}>
-                        Need something? Ask CareLead anything about your profile.
-                      </Text>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <View style={styles.briefingLines}>
-                    {/* Post-visit prompts come first — golden 24h recall window. */}
-                    {briefing.postVisitItems.map((item) => {
+          {/* Weekly summary — Monday-first-visit, gated per user+week */}
+          {weeklySummary && user?.id && (
+            <View style={styles.zone}>
+              <View style={styles.summaryCard}>
+                <View style={styles.summaryHeader}>
+                  <Ionicons
+                    name="sparkles"
+                    size={18}
+                    color={COLORS.accent.dark}
+                  />
+                  <Text style={styles.summaryTitle}>Last week you completed {weeklySummary.totalCount} tasks</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      void dismissWeeklySummary(user.id, weeklySummary.weekStartIso);
+                    }}
+                    hitSlop={8}
+                  >
+                    <Ionicons
+                      name="close"
+                      size={18}
+                      color={COLORS.text.tertiary}
+                    />
+                  </TouchableOpacity>
+                </View>
+                {weeklySummary.highlights.map((h) => (
+                  <View key={h.id} style={styles.summaryLine}>
+                    <Ionicons
+                      name="checkmark"
+                      size={14}
+                      color={COLORS.success.DEFAULT}
+                    />
+                    <Text style={styles.summaryLineText} numberOfLines={1}>
+                      {h.title}
+                    </Text>
+                  </View>
+                ))}
+                <Text style={styles.summaryFooter}>Keep it up.</Text>
+              </View>
+            </View>
+          )}
+
+          {/* Streak celebration — 3/7/30 day thresholds */}
+          {streakCelebration && user?.id && (
+            <View style={styles.zone}>
+              <TouchableOpacity
+                style={styles.streakCard}
+                onPress={() => {
+                  void dismissStreakCelebration(user.id, streakCelebration);
+                }}
+                activeOpacity={0.9}
+              >
+                <Ionicons
+                  name="flame"
+                  size={22}
+                  color={COLORS.accent.dark}
+                />
+                <View style={styles.streakTextWrap}>
+                  <Text style={styles.streakTitle}>
+                    {streakCelebration === 30
+                      ? 'A full month of staying on top of your health!'
+                      : streakCelebration === 7
+                        ? "7-day streak! You're on a roll."
+                        : "3-day streak — nice start!"}
+                  </Text>
+                  <Text style={styles.streakHint}>Tap to dismiss</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* ZONE 2B: MODULE-SPECIFIC BRIEFING BULLETS (supporting detail) */}
+          {!briefing.nothingDue &&
+            briefing.postVisitItems.length +
+              briefing.preAppointmentItems.length +
+              briefing.billingItems.length +
+              briefing.resultsItems.length +
+              briefing.preventiveItems.length +
+              briefing.caregiverEnrichmentItems.length +
+              (briefing.attentionCount > 0 ? 1 : 0) +
+              (briefing.showProfileReview ? 1 : 0) +
+              (briefing.dataQualityItem ? 1 : 0) >
+              0 && (
+            <View style={styles.zone}>
+              <Text style={styles.sectionTitle}>HAPPENING IN YOUR CARE</Text>
+              <View style={styles.supportingCard}>
+                <View style={styles.briefingLines}>
+                  {/* Post-visit prompts come first — golden 24h recall window. */}
+                  {briefing.postVisitItems.map((item) => {
                       const tintColor =
                         item.color === 'critical'
                           ? COLORS.error.DEFAULT
@@ -711,48 +808,6 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                       );
                     })}
-                    {briefing.hasMeds && (
-                      <View style={styles.briefingLine}>
-                        <Ionicons name="medical" size={18} color={COLORS.primary.DEFAULT} />
-                        <Text style={styles.briefingLineText}>
-                          {briefing.medTotal} medications due ({briefing.medTaken} taken)
-                        </Text>
-                      </View>
-                    )}
-                    {briefing.nextAppointment && (
-                      <View style={styles.briefingLine}>
-                        <Ionicons name="calendar" size={18} color={COLORS.primary.DEFAULT} />
-                        <Text style={styles.briefingLineText} numberOfLines={1}>
-                          {briefing.nextAppointment.provider_name
-                            ? `Appointment with ${briefing.nextAppointment.provider_name}`
-                            : briefing.nextAppointment.title}
-                          {' at '}
-                          {new Date(briefing.nextAppointment.start_time).toLocaleTimeString('en-US', {
-                            hour: 'numeric',
-                            minute: '2-digit',
-                          })}
-                        </Text>
-                      </View>
-                    )}
-                    {(briefing.tasksDueCount > 0 || briefing.overdueCount > 0) && (
-                      <View style={styles.briefingLine}>
-                        <Ionicons
-                          name={briefing.overdueCount > 0 ? 'warning' : 'checkmark-circle'}
-                          size={18}
-                          color={briefing.overdueCount > 0 ? COLORS.error.DEFAULT : COLORS.primary.DEFAULT}
-                        />
-                        <Text
-                          style={[
-                            styles.briefingLineText,
-                            briefing.overdueCount > 0 && styles.briefingLineTextWarning,
-                          ]}
-                        >
-                          {briefing.overdueCount > 0
-                            ? `${briefing.overdueCount} overdue`
-                            : `${briefing.tasksDueCount} tasks due today`}
-                        </Text>
-                      </View>
-                    )}
                     {briefing.attentionCount > 0 && (
                       <View style={styles.briefingLine}>
                         <Ionicons name="notifications" size={18} color={COLORS.accent.dark} />
@@ -963,35 +1018,10 @@ export default function HomeScreen() {
                         </Text>
                       </TouchableOpacity>
                     )}
-                    {briefing.briefingLineCount < 3 && (
-                      <TouchableOpacity
-                        style={styles.briefingAskPrompt}
-                        activeOpacity={0.7}
-                        onPress={(e) => {
-                          e.stopPropagation?.();
-                          router.push('/(main)/ask');
-                        }}
-                      >
-                        <Ionicons
-                          name="chatbubble-ellipses-outline"
-                          size={16}
-                          color={COLORS.primary.DEFAULT}
-                        />
-                        <Text style={styles.briefingAskPromptText}>
-                          Need something? Ask CareLead anything about your profile.
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-
-                <View style={styles.briefingFooter}>
-                  <Text style={styles.briefingFooterText}>View details</Text>
-                  <Ionicons name="chevron-forward" size={16} color={COLORS.primary.DEFAULT} />
                 </View>
               </View>
-            </TouchableOpacity>
-          </View>
+            </View>
+          )}
 
           {/* SMART ENRICHMENT: top nudge + link to full suggestions */}
           {topNudge && activeProfileId && (
@@ -1321,6 +1351,76 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.semibold,
+  },
+  supportingCard: {
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    ...CARD_SHADOW,
+    shadowOpacity: 0.05,
+  },
+  // Weekly summary card
+  summaryCard: {
+    backgroundColor: COLORS.accent.DEFAULT + '14',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.accent.DEFAULT + '33',
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  summaryTitle: {
+    flex: 1,
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  summaryLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  summaryLineText: {
+    flex: 1,
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.DEFAULT,
+  },
+  summaryFooter: {
+    marginTop: 10,
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.accent.dark,
+    fontStyle: 'italic',
+  },
+  // Streak celebration
+  streakCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: COLORS.accent.DEFAULT + '20',
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: COLORS.accent.DEFAULT + '40',
+  },
+  streakTextWrap: {
+    flex: 1,
+  },
+  streakTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  streakHint: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    marginTop: 2,
   },
 
   // Smart enrichment

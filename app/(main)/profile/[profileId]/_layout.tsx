@@ -32,6 +32,7 @@ export default function ProfileIdLayout() {
       <Stack.Screen name="add-fact" options={{ title: 'Add Information' }} />
       <Stack.Screen name="strengthen" options={{ title: 'Your Health Profile' }} />
       <Stack.Screen name="data-quality" options={{ title: 'Profile Data Quality' }} />
+      <Stack.Screen name="priorities" options={{ title: 'What Matters to You' }} />
     </Stack>
   );
 }
