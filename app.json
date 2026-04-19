@@ -15,7 +15,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.carelead.app"
+      "bundleIdentifier": "com.carelead.app",
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "CareLead uses Face ID to protect your health information"
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -32,6 +35,7 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
+      "expo-local-authentication",
       "@react-native-community/datetimepicker"
     ]
   }

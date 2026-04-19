@@ -67,16 +67,16 @@ export default function CollectNameScreen() {
 
     await refreshProfiles();
 
-    console.log('[collect-name] navigating home');
-    router.replace('/(main)/(tabs)');
+    console.log('[collect-name] navigating to onboarding');
+    router.replace('/(auth)/onboarding');
   }
 
   async function handleSkip() {
     if (saving) return;
     setSaving(true);
-    console.log('[collect-name] skipped, navigating home');
+    console.log('[collect-name] skipped, navigating to onboarding');
     await refreshProfiles();
-    router.replace('/(main)/(tabs)');
+    router.replace('/(auth)/onboarding');
   }
 
   return (

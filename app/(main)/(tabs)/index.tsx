@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Dimensions,
+  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -29,6 +30,14 @@ import type { BillingBriefingItem } from '@/services/billingBriefing';
 import type { ResultsBriefingItem } from '@/services/resultsBriefing';
 import type { PreventiveBriefingItem } from '@/services/preventiveBriefing';
 import { needsMedicationMigration, migrateMedicationFacts } from '@/services/medicationMigration';
+import {
+  enableBiometricForUser,
+  getBiometricCapability,
+  hasBeenPromptedForUser,
+  isBiometricEnabledForUser,
+  markPromptedForUser,
+  promptBiometric,
+} from '@/services/biometric';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { Task } from '@/lib/types/tasks';
@@ -105,6 +114,59 @@ export default function HomeScreen() {
   const { data: resultsBriefing } = useResultsBriefing(activeProfileId, 2);
   const { data: preventiveItems } = usePreventiveItems(activeProfileId);
   const { data: preventiveBriefing } = usePreventiveBriefing(activeProfileId, 2);
+
+  // One-time biometric enrollment prompt per user on this device
+  const biometricPromptRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!user?.id) return;
+    if (biometricPromptRef.current === user.id) return;
+    biometricPromptRef.current = user.id;
+
+    let cancelled = false;
+    (async () => {
+      const [capability, alreadyEnabled, alreadyPrompted] = await Promise.all([
+        getBiometricCapability(),
+        isBiometricEnabledForUser(user.id),
+        hasBeenPromptedForUser(user.id),
+      ]);
+      if (cancelled) return;
+      if (!capability.available || !capability.enrolled) return;
+      if (alreadyEnabled || alreadyPrompted) return;
+
+      const label = capability.label;
+      Alert.alert(
+        `Enable ${label}?`,
+        `Use ${label} to quickly unlock CareLead and keep your health information secure.`,
+        [
+          {
+            text: 'Not now',
+            style: 'cancel',
+            onPress: () => {
+              markPromptedForUser(user.id);
+            },
+          },
+          {
+            text: 'Enable',
+            onPress: async () => {
+              const result = await promptBiometric(`Enable ${label} for CareLead`);
+              if (result.success) {
+                await enableBiometricForUser(user.id);
+              } else if (result.error && result.error !== 'user_cancel' && result.error !== 'cancelled') {
+                Alert.alert(
+                  `Could not enable ${label}`,
+                  `Error: ${result.error}\n\nYou can try again later from Settings.`,
+                );
+              }
+              await markPromptedForUser(user.id);
+            },
+          },
+        ],
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   // Auto-migrate medication profile_facts → med_medications on first load
   const migrationRanRef = useRef<string | null>(null);

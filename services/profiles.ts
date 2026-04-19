@@ -133,6 +133,46 @@ export async function updateProfile(
 }
 
 /**
+ * Update onboarding basics (DOB, gender, zip code).
+ * DOB and gender are stored on the profile; zip is stored on auth user metadata
+ * (no zip column exists yet — reserved for future use).
+ */
+export async function updateProfileBasics(
+  profileId: string,
+  updates: {
+    dateOfBirth?: string;
+    gender?: string;
+    zipCode?: string;
+  },
+): Promise<ServiceResult<void>> {
+  const patch: { date_of_birth?: string; gender?: string } = {};
+  if (updates.dateOfBirth) patch.date_of_birth = updates.dateOfBirth;
+  if (updates.gender) patch.gender = updates.gender;
+
+  if (Object.keys(patch).length > 0) {
+    const { error } = await supabase
+      .from('profiles')
+      .update(patch)
+      .eq('id', profileId);
+
+    if (error) {
+      return { success: false, error: error.message, code: error.code };
+    }
+  }
+
+  if (updates.zipCode) {
+    const { error: metaError } = await supabase.auth.updateUser({
+      data: { zip_code: updates.zipCode },
+    });
+    if (metaError) {
+      return { success: false, error: metaError.message };
+    }
+  }
+
+  return { success: true, data: undefined };
+}
+
+/**
  * Add a profile fact (manual entry, verified immediately).
  */
 export async function addProfileFact(
