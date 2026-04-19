@@ -10,7 +10,7 @@ import { buildContextLine } from '@/services/taskBundling';
  * no tier is present. The score is intentionally coarse; personalization
  * adjustments (below) matter more than the starting point.
  */
-function baseScore(task: Task): number {
+export function baseScore(task: Task): number {
   const tier = task.context_json?.tier as TaskTier | undefined;
   if (tier === 'critical') return 90;
   if (tier === 'important') return 60;
@@ -129,12 +129,18 @@ export function personalizeTasks(
   priorities: PatientPriorities | null,
   entityNames: Record<string, string> = {},
 ): PersonalizedTask[] {
-  return tasks.map((t) => ({
-    ...t,
-    personalizedPriority: calculatePersonalizedPriority(t, priorities),
-    contextLine: buildContextLine(
-      t,
-      t.source_ref ? entityNames[t.source_ref] ?? null : null,
-    ),
-  }));
+  return tasks.map((t) => {
+    const base = baseScore(t);
+    const personalized = calculatePersonalizedPriority(t, priorities);
+    return {
+      ...t,
+      basePriority: base,
+      personalizedPriority: personalized,
+      boostedByPriority: priorities !== null && personalized >= base * 1.3,
+      contextLine: buildContextLine(
+        t,
+        t.source_ref ? entityNames[t.source_ref] ?? null : null,
+      ),
+    };
+  });
 }

@@ -658,6 +658,14 @@ export default function HomeScreen() {
               dateLabel={todayDateStr}
               onViewDetails={() => router.push('/(main)/today')}
               onAsk={() => router.push('/(main)/ask')}
+              onPrioritiesPress={
+                activeProfileId
+                  ? () =>
+                      router.push(
+                        `/(main)/profile/${activeProfileId}/priorities`,
+                      )
+                  : undefined
+              }
             />
           </View>
 

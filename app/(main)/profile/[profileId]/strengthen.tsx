@@ -12,6 +12,7 @@ import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useAccessGrants } from '@/hooks/useCaregivers';
 import { useSmartEnrichment, getMilestone } from '@/hooks/useSmartEnrichment';
+import { usePatientPriorities } from '@/hooks/usePatientPriorities';
 import {
   MilestoneBadgeCard,
   SmartNudgeCard,
@@ -56,6 +57,17 @@ export default function StrengthenProfileScreen() {
     const list = accessGrants ?? [];
     return list.find((g) => g.status === 'active') ?? null;
   }, [accessGrants]);
+
+  const { data: priorities } = usePatientPriorities(profileId ?? null);
+  const hasPriorities =
+    !!priorities &&
+    (priorities.health_priorities.length > 0 ||
+      priorities.friction_points.length > 0 ||
+      priorities.conditions_of_focus.length > 0);
+  const topPriorityTopics = useMemo(
+    () => (priorities?.health_priorities ?? []).slice(0, 3).map((hp) => hp.topic),
+    [priorities],
+  );
 
   const [categoryExpanded, setCategoryExpanded] = useState(false);
 
@@ -120,11 +132,85 @@ export default function StrengthenProfileScreen() {
         </View>
       </View>
 
-      {/* Suggested next steps */}
-      {nonMilestoneNudges.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>SUGGESTED NEXT STEPS</Text>
+      {/* Suggested next steps — the personalize card is always present. */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>SUGGESTED NEXT STEPS</Text>
           <View style={styles.nudgeList}>
+            {/* Personalize your experience — high-impact when not set */}
+            <TouchableOpacity
+              style={[
+                styles.personalizeCard,
+                !hasPriorities && styles.personalizeCardHigh,
+              ]}
+              onPress={() =>
+                router.push(`/(main)/profile/${profileId}/priorities`)
+              }
+              activeOpacity={0.75}
+            >
+              <View style={styles.personalizeHeader}>
+                <View
+                  style={[
+                    styles.personalizeIcon,
+                    {
+                      backgroundColor: hasPriorities
+                        ? COLORS.primary.DEFAULT + '14'
+                        : COLORS.accent.DEFAULT + '22',
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name={hasPriorities ? 'heart' : 'sparkles'}
+                    size={18}
+                    color={
+                      hasPriorities
+                        ? COLORS.primary.DEFAULT
+                        : COLORS.accent.dark
+                    }
+                  />
+                </View>
+                <View style={styles.personalizeBody}>
+                  <View style={styles.personalizeTitleRow}>
+                    <Text style={styles.personalizeTitle}>
+                      {hasPriorities
+                        ? 'Update your priorities'
+                        : 'Personalize your experience'}
+                    </Text>
+                    {!hasPriorities && (
+                      <View style={styles.highImpactBadge}>
+                        <Text style={styles.highImpactBadgeText}>
+                          High impact
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.personalizeDetail}>
+                    {hasPriorities
+                      ? 'Add more, remove old ones, or tell us what has changed.'
+                      : 'Tell CareLead what matters most. This personalizes your tasks, reminders, and daily briefing.'}
+                  </Text>
+                  {hasPriorities && topPriorityTopics.length > 0 && (
+                    <View style={styles.personalizeChips}>
+                      {topPriorityTopics.map((t) => (
+                        <View key={t} style={styles.personalizeChip}>
+                          <Text
+                            style={styles.personalizeChipText}
+                            numberOfLines={1}
+                          >
+                            {t}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={16}
+                  color={COLORS.primary.DEFAULT}
+                />
+              </View>
+            </TouchableOpacity>
+
             {nonMilestoneNudges.map((nudge) => (
               <SmartNudgeCard
                 key={nudge.id}
@@ -134,8 +220,7 @@ export default function StrengthenProfileScreen() {
               />
             ))}
           </View>
-        </View>
-      )}
+      </View>
 
       {/* Milestone earned this visit */}
       {milestoneNudges.length > 0 && (
@@ -392,6 +477,67 @@ const styles = StyleSheet.create({
   },
   nudgeList: {
     gap: 10,
+  },
+  personalizeCard: {
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderWidth: 1,
+    borderColor: COLORS.border.light,
+  },
+  personalizeCardHigh: {
+    backgroundColor: COLORS.accent.DEFAULT + '0D',
+    borderColor: COLORS.accent.DEFAULT + '44',
+  },
+  personalizeHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  personalizeIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  personalizeBody: {
+    flex: 1,
+  },
+  personalizeTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  personalizeTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  personalizeDetail: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    marginTop: 4,
+    lineHeight: 17,
+  },
+  personalizeChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  personalizeChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    maxWidth: 150,
+  },
+  personalizeChipText: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.primary.DEFAULT,
   },
   milestoneGrid: {
     flexDirection: 'row',

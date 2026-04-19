@@ -24,9 +24,16 @@ export interface DailyBriefing {
   priorityUpdate: BriefingLine | null;
   /** Optional encouragement (one line — only when earned). */
   encouragement: BriefingLine | null;
+  /**
+   * Optional low-priority prompt to refresh stale priorities. Surfaces when
+   * patient_priorities has not been updated in 6+ months.
+   */
+  priorityStalePrompt: BriefingLine | null;
   /** True if nothing meaningful is in any bucket. */
   isQuiet: boolean;
 }
+
+const STALE_PRIORITY_DAYS = 180;
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -258,6 +265,22 @@ export function buildDailyBriefing(input: {
     return null;
   })();
 
+  // ── Stale priorities prompt ───────────────────────────────────────
+  const priorityStalePrompt = (() => {
+    if (!priorities) return null;
+    const updatedMs = new Date(priorities.updated_at).getTime();
+    if (!Number.isFinite(updatedMs)) return null;
+    const daysStale = Math.floor((Date.now() - updatedMs) / MS_PER_DAY);
+    if (daysStale < STALE_PRIORITY_DAYS) return null;
+    const months = Math.floor(daysStale / 30);
+    return {
+      key: 'priority-stale',
+      icon: 'refresh-outline',
+      tone: 'default' as BriefingLineTone,
+      text: `Your priorities were last updated ${months} months ago. Still accurate?`,
+    };
+  })();
+
   // ── Encouragement ──────────────────────────────────────────────────
   const encouragement = (() => {
     if (newMilestone) {
@@ -291,7 +314,8 @@ export function buildDailyBriefing(input: {
     immediate.length === 0 &&
     !outlook &&
     !priorityUpdate &&
-    !encouragement;
+    !encouragement &&
+    !priorityStalePrompt;
 
   return {
     greeting,
@@ -300,6 +324,7 @@ export function buildDailyBriefing(input: {
     outlook,
     priorityUpdate,
     encouragement,
+    priorityStalePrompt,
     isQuiet,
   };
 }

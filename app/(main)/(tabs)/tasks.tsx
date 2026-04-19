@@ -8,12 +8,14 @@ import {
   StyleSheet,
   Alert,
   ScrollView,
+  Platform,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Swipeable } from 'react-native-gesture-handler';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useQueryClient } from '@tanstack/react-query';
+import * as SecureStore from 'expo-secure-store';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useAuth } from '@/hooks/useAuth';
 import { useUpdateTaskStatus } from '@/hooks/useTasks';
@@ -93,6 +95,44 @@ const SOURCE_ICONS: Record<TaskSourceType, keyof typeof Ionicons.glyphMap> = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+const PRIORITIES_INVITE_DISMISS_KEY = 'tasks.priorities_invite_dismissed_until';
+const DISMISSAL_DAYS = 7;
+
+async function readDismissed(): Promise<string | null> {
+  if (Platform.OS === 'web') {
+    try {
+      return typeof localStorage !== 'undefined'
+        ? localStorage.getItem(PRIORITIES_INVITE_DISMISS_KEY)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  try {
+    return await SecureStore.getItemAsync(PRIORITIES_INVITE_DISMISS_KEY);
+  } catch {
+    return null;
+  }
+}
+
+async function writeDismissed(iso: string): Promise<void> {
+  if (Platform.OS === 'web') {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(PRIORITIES_INVITE_DISMISS_KEY, iso);
+      }
+    } catch {
+      /* best-effort */
+    }
+    return;
+  }
+  try {
+    await SecureStore.setItemAsync(PRIORITIES_INVITE_DISMISS_KEY, iso);
+  } catch {
+    /* best-effort */
+  }
+}
+
 function formatDueDate(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
@@ -145,6 +185,33 @@ export default function TasksScreen() {
 
   useImplicitSignalRefresh(activeProfileId);
 
+  // Priorities invite card: hide for 7 days when dismissed.
+  const [inviteHiddenUntil, setInviteHiddenUntil] = useState<Date | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        const stored = await readDismissed();
+        if (cancelled) return;
+        if (!stored) {
+          setInviteHiddenUntil(null);
+          return;
+        }
+        const d = new Date(stored);
+        setInviteHiddenUntil(Number.isFinite(d.getTime()) ? d : null);
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, []),
+  );
+
+  const handleDismissInvite = useCallback(async () => {
+    const until = new Date(Date.now() + DISMISSAL_DAYS * 24 * 60 * 60 * 1000);
+    setInviteHiddenUntil(until);
+    await writeDismissed(until.toISOString());
+  }, []);
+
   // Run expiry scan once per profile mount — background, best-effort.
   const expiryScanRanRef = useRef<string | null>(null);
   useEffect(() => {
@@ -183,8 +250,6 @@ export default function TasksScreen() {
       filteredIndividuals: filterTasksByCategory(individuals, sourceTypes),
     };
   }, [bundles, individuals, category]);
-
-  const totalCount = filteredBundles.length + filteredIndividuals.length;
 
   // Celebration animation: subtle scale-in, hold, fade-out.
   const triggerCelebration = useCallback(
@@ -330,6 +395,16 @@ export default function TasksScreen() {
                   >
                     {formatDueDate(task.due_date)}
                   </Text>
+                )}
+                {!compact && task.boostedByPriority && isOpen && (
+                  <View style={styles.priorityBadge}>
+                    <Ionicons
+                      name="star"
+                      size={10}
+                      color={COLORS.primary.DEFAULT}
+                    />
+                    <Text style={styles.priorityBadgeText}>Priority</Text>
+                  </View>
                 )}
                 {!compact && cta && (
                   <View style={styles.ctaChip}>
@@ -485,7 +560,9 @@ export default function TasksScreen() {
                 // shape is compatible for rendering; we just lack the score).
                 const pt: PersonalizedTask = {
                   ...t,
+                  basePriority: bundle.personalizedPriority,
                   personalizedPriority: bundle.personalizedPriority,
+                  boostedByPriority: false,
                   contextLine: null,
                 };
                 return renderTaskCard(pt, true);
@@ -668,34 +745,109 @@ export default function TasksScreen() {
         ))}
       </ScrollView>
 
-      {/* Priorities CTA — show if open tab, enough tasks, no priorities yet */}
-      {statusTab === 'open' &&
-        !priorities &&
-        totalCount >= 5 &&
-        activeProfile && (
-          <TouchableOpacity
-            style={styles.prioritiesCta}
-            activeOpacity={0.8}
-            onPress={() =>
-              router.push(`/(main)/profile/${activeProfile.id}/priorities` as never)
-            }
-          >
-            <View style={styles.prioritiesCtaIcon}>
-              <Ionicons name="heart-outline" size={20} color={COLORS.primary.DEFAULT} />
-            </View>
-            <View style={styles.prioritiesCtaContent}>
-              <Text style={styles.prioritiesCtaTitle}>What matters to you?</Text>
-              <Text style={styles.prioritiesCtaBody}>
-                Tell us what's most important so we can focus on it.
-              </Text>
-            </View>
-            <Ionicons
-              name="chevron-forward"
-              size={16}
-              color={COLORS.primary.DEFAULT}
-            />
-          </TouchableOpacity>
-        )}
+      {/* Priorities card — persistent. Invite before set, compact summary after. */}
+      {activeProfile && (() => {
+        const hasPriorities =
+          !!priorities &&
+          (priorities.health_priorities.length > 0 ||
+            priorities.friction_points.length > 0 ||
+            priorities.conditions_of_focus.length > 0);
+        const inviteDismissed =
+          inviteHiddenUntil !== null && inviteHiddenUntil.getTime() > Date.now();
+        const gotoPriorities = () =>
+          router.push(
+            `/(main)/profile/${activeProfile.id}/priorities` as never,
+          );
+
+        if (hasPriorities) {
+          // Compact summary with top chips
+          const topTopics = priorities!.health_priorities
+            .slice(0, 3)
+            .map((hp) => hp.topic);
+          return (
+            <TouchableOpacity
+              style={styles.prioritiesCompact}
+              activeOpacity={0.8}
+              onPress={gotoPriorities}
+            >
+              <View style={styles.prioritiesCompactHeader}>
+                <View style={styles.prioritiesCompactTitleRow}>
+                  <Ionicons
+                    name="heart"
+                    size={14}
+                    color={COLORS.primary.DEFAULT}
+                  />
+                  <Text style={styles.prioritiesCompactTitle}>
+                    Your Priorities
+                  </Text>
+                </View>
+                <Text style={styles.prioritiesCompactUpdate}>Update</Text>
+              </View>
+              <View style={styles.prioritiesCompactChips}>
+                {topTopics.map((t) => (
+                  <View key={t} style={styles.prioritiesCompactChip}>
+                    <Text
+                      style={styles.prioritiesCompactChipText}
+                      numberOfLines={1}
+                    >
+                      {t}
+                    </Text>
+                  </View>
+                ))}
+                {priorities!.health_priorities.length > 3 && (
+                  <Text style={styles.prioritiesCompactMore}>
+                    +{priorities!.health_priorities.length - 3} more
+                  </Text>
+                )}
+              </View>
+            </TouchableOpacity>
+          );
+        }
+
+        if (inviteDismissed) return null;
+
+        return (
+          <View style={styles.prioritiesCta}>
+            <TouchableOpacity
+              style={styles.prioritiesCtaBody}
+              activeOpacity={0.8}
+              onPress={gotoPriorities}
+            >
+              <View style={styles.prioritiesCtaIcon}>
+                <Ionicons
+                  name="heart-outline"
+                  size={20}
+                  color={COLORS.primary.DEFAULT}
+                />
+              </View>
+              <View style={styles.prioritiesCtaContent}>
+                <Text style={styles.prioritiesCtaTitle}>
+                  What matters most to you?
+                </Text>
+                <Text style={styles.prioritiesCtaDesc}>
+                  Tell CareLead your priorities and we'll focus on what you
+                  care about.
+                </Text>
+                <View style={styles.prioritiesCtaBadge}>
+                  <Text style={styles.prioritiesCtaBadgeText}>Customize</Text>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={12}
+                    color={COLORS.primary.DEFAULT}
+                  />
+                </View>
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.prioritiesCtaDismiss}
+              onPress={handleDismissInvite}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="close" size={14} color={COLORS.text.tertiary} />
+            </TouchableOpacity>
+          </View>
+        );
+      })()}
 
       {/* Empty state */}
       {!hasAnyContent ? (
@@ -929,8 +1081,10 @@ const styles = StyleSheet.create({
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.semibold,
   },
-  // Priorities CTA
+  // Priorities CTA (invite, shown when no priorities set)
   prioritiesCta: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     marginHorizontal: 24,
     marginBottom: 12,
     padding: 14,
@@ -938,8 +1092,11 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.secondary.DEFAULT + '14',
     borderWidth: 1,
     borderColor: COLORS.secondary.DEFAULT + '33',
+  },
+  prioritiesCtaBody: {
+    flex: 1,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   prioritiesCtaIcon: {
     width: 36,
@@ -959,9 +1116,102 @@ const styles = StyleSheet.create({
     color: COLORS.text.DEFAULT,
     marginBottom: 2,
   },
-  prioritiesCtaBody: {
+  prioritiesCtaDesc: {
     fontSize: FONT_SIZES.xs,
     color: COLORS.text.secondary,
+    lineHeight: 16,
+    marginBottom: 6,
+  },
+  prioritiesCtaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+  },
+  prioritiesCtaBadgeText: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+  },
+  prioritiesCtaDismiss: {
+    padding: 4,
+    marginLeft: 4,
+  },
+  // Priorities compact card (shown when priorities set)
+  prioritiesCompact: {
+    marginHorizontal: 24,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '33',
+  },
+  prioritiesCompactHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  prioritiesCompactTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  prioritiesCompactTitle: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  prioritiesCompactUpdate: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+  },
+  prioritiesCompactChips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    alignItems: 'center',
+  },
+  prioritiesCompactChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    maxWidth: 180,
+  },
+  prioritiesCompactChipText: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.primary.DEFAULT,
+  },
+  prioritiesCompactMore: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    marginLeft: 2,
+  },
+  // Priority boost badge on tasks
+  priorityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+  },
+  priorityBadgeText: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
   },
   // Sections
   listContent: {

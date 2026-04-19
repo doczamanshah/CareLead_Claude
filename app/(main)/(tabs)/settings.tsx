@@ -18,6 +18,7 @@ import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import { useCareGuidanceLevel, useWeeklyDigest } from '@/hooks/usePreferences';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePatientPriorities } from '@/hooks/usePatientPriorities';
 import {
   useLastReviewedAt,
   useReviewFrequency,
@@ -99,6 +100,20 @@ function formatLastReviewed(iso: string | null | undefined): string {
   })}`;
 }
 
+function formatPriorityUpdate(iso: string | null | undefined): string {
+  if (!iso) return 'Just now';
+  const now = Date.now();
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return 'Recently';
+  const diffDays = Math.floor((now - then) / (1000 * 60 * 60 * 24));
+  if (diffDays <= 0) return 'Updated today';
+  if (diffDays === 1) return 'Updated yesterday';
+  if (diffDays < 7) return `Updated ${diffDays}d ago`;
+  if (diffDays < 30) return `Updated ${Math.floor(diffDays / 7)}w ago`;
+  if (diffDays < 365) return `Updated ${Math.floor(diffDays / 30)}mo ago`;
+  return `Updated ${Math.floor(diffDays / 365)}y ago`;
+}
+
 export default function SettingsScreen() {
   const { level, setLevel, isUpdating } = useCareGuidanceLevel();
   const { enabled: weeklyDigestEnabled, setEnabled: setWeeklyDigest } = useWeeklyDigest();
@@ -107,6 +122,18 @@ export default function SettingsScreen() {
   const queryClient = useQueryClient();
   const { activeProfileId } = useActiveProfile();
   const { data: lastReviewedAt } = useLastReviewedAt(activeProfileId);
+  const { data: priorities } = usePatientPriorities(activeProfileId);
+  const hasPriorities =
+    !!priorities &&
+    (priorities.health_priorities.length > 0 ||
+      priorities.friction_points.length > 0 ||
+      priorities.conditions_of_focus.length > 0);
+  const priorityPreview = hasPriorities
+    ? priorities!.health_priorities
+        .slice(0, 2)
+        .map((hp) => hp.topic)
+        .join(', ')
+    : null;
   const { data: reviewFrequency } = useReviewFrequency();
   const setFrequencyMutation = useSetReviewFrequency();
   const [showReviewFrequencyOptions, setShowReviewFrequencyOptions] = useState(false);
@@ -581,6 +608,52 @@ export default function SettingsScreen() {
             </View>
           ) : null}
         </View>
+      </View>
+
+      {/* Personalization Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Personalization</Text>
+        <Text style={styles.sectionDescription}>
+          Shape how CareLead organizes your tasks and briefing around what
+          matters to you.
+        </Text>
+        <TouchableOpacity
+          style={styles.autoLockRow}
+          activeOpacity={0.7}
+          onPress={() => {
+            if (!activeProfileId) return;
+            router.push(`/(main)/profile/${activeProfileId}/priorities`);
+          }}
+          disabled={!activeProfileId}
+        >
+          <View style={styles.autoLockContent}>
+            <Text style={styles.autoLockLabel}>Your Priorities</Text>
+            {hasPriorities ? (
+              <Text style={styles.autoLockValue}>
+                {priorityPreview}
+                {priorities!.health_priorities.length > 2
+                  ? ` +${priorities!.health_priorities.length - 2} more`
+                  : ''}
+                {' · '}
+                {formatPriorityUpdate(priorities!.updated_at)}
+              </Text>
+            ) : (
+              <Text
+                style={[
+                  styles.autoLockValue,
+                  { color: COLORS.text.tertiary },
+                ]}
+              >
+                Not set yet
+              </Text>
+            )}
+          </View>
+          <Ionicons
+            name="chevron-forward"
+            size={18}
+            color={COLORS.text.tertiary}
+          />
+        </TouchableOpacity>
       </View>
 
       {/* Care Guidance Section */}

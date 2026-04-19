@@ -13,6 +13,7 @@ interface Props {
   dateLabel: string;
   onViewDetails: () => void;
   onAsk?: () => void;
+  onPrioritiesPress?: () => void;
 }
 
 const toneColors: Record<BriefingLineTone, string> = {
@@ -34,6 +35,7 @@ export function DailyBriefingCard({
   dateLabel,
   onViewDetails,
   onAsk,
+  onPrioritiesPress,
 }: Props) {
   return (
     <TouchableOpacity
@@ -98,6 +100,31 @@ export function DailyBriefingCard({
               </View>
             )}
           </View>
+        )}
+
+        {briefing.priorityStalePrompt && onPrioritiesPress && (
+          <TouchableOpacity
+            style={styles.stalePrompt}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              onPrioritiesPress();
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="refresh-outline"
+              size={16}
+              color={COLORS.text.secondary}
+            />
+            <Text style={styles.stalePromptText}>
+              {briefing.priorityStalePrompt.text}
+            </Text>
+            <Ionicons
+              name="chevron-forward"
+              size={14}
+              color={COLORS.text.tertiary}
+            />
+          </TouchableOpacity>
         )}
 
         {onAsk && (briefing.isQuiet || briefing.immediate.length < 2) && (
@@ -245,6 +272,23 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary.DEFAULT + '0D',
     borderWidth: 1,
     borderColor: COLORS.primary.DEFAULT + '20',
+  },
+  stalePrompt: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: COLORS.surface.muted,
+    borderWidth: 1,
+    borderColor: COLORS.border.light,
+  },
+  stalePromptText: {
+    flex: 1,
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
   },
   askPromptText: {
     flex: 1,

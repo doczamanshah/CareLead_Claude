@@ -204,6 +204,10 @@ export interface TaskBundle {
 export interface PersonalizedTask extends Task {
   personalizedPriority: number;
   contextLine: string | null;
+  /** Score before priority-based boosts were applied. */
+  basePriority: number;
+  /** True when personalizedPriority exceeds basePriority × 1.3. */
+  boostedByPriority: boolean;
 }
 
 /**
