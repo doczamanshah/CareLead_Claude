@@ -25,6 +25,7 @@ import type {
   FactProvenance,
   ProfileIndex,
 } from '@/lib/types/ask';
+import { gapActionForUnclassified } from '@/services/askGapActions';
 
 type ServiceResult<T> =
   | { success: true; data: T }
@@ -158,6 +159,7 @@ function normalizeFallbackResponse(
   query: string,
   raw: RawFallbackResponse,
   sentFacts: CanonicalFact[],
+  profileId: string,
 ): AskResponse {
   const factsById = new Map(sentFacts.map((f) => [f.id, f]));
   const factsBySourceId = new Map(sentFacts.filter((f) => f.sourceId).map((f) => [f.sourceId!, f]));
@@ -194,6 +196,7 @@ function normalizeFallbackResponse(
     .filter((f): f is string => !!f)
     .slice(0, 3);
 
+  const noResults = raw.no_results === true || cards.length === 0;
   return {
     query,
     shortAnswer:
@@ -205,7 +208,11 @@ function normalizeFallbackResponse(
     summaryLists: [],
     timelines: [],
     suggestedFollowUps,
-    noResults: raw.no_results === true || cards.length === 0,
+    noResults,
+    // When the AI couldn't find anything, lean on the keyword gap detector
+    // to point the user at a one-tap entry route. Successful fallbacks keep
+    // a null gap so the answer doesn't get a redundant "want to add?" CTA.
+    gapAction: noResults ? gapActionForUnclassified(query, { profileId }) : null,
   };
 }
 
@@ -252,6 +259,7 @@ export async function runAiFallback(
     query,
     (data ?? {}) as RawFallbackResponse,
     sentFacts,
+    profileIndex.profileId,
   );
   return { success: true, data: response };
 }

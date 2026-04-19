@@ -1,14 +1,19 @@
-import { useMemo } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { useMemo, useState } from 'react';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
+import { SkipReasonSheet } from '@/components/SkipReasonSheet';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useTasks, useUpdateTaskStatus } from '@/hooks/useTasks';
 import { useAppointments } from '@/hooks/useAppointments';
 import { useTodaysDoses, useLogAdherence } from '@/hooks/useMedications';
+import {
+  useLogSkipReason,
+  useStopMedication,
+} from '@/hooks/useMedicationRefillCheck';
 import { useProfileGaps } from '@/hooks/useProfileGaps';
 import { useBillingBriefing } from '@/hooks/useBilling';
 import { useResultsBriefing } from '@/hooks/useResults';
@@ -79,6 +84,16 @@ export default function TodayDetailScreen() {
   const { data: preventiveItems } = usePreventiveItems(activeProfileId);
   const updateStatus = useUpdateTaskStatus();
   const logAdherence = useLogAdherence();
+  const logSkipReason = useLogSkipReason();
+  const stopMedication = useStopMedication();
+
+  // After a skip is logged we hold the med here so the SkipReasonSheet can
+  // ask "why?" without coupling itself to navigation. Null = sheet closed.
+  const [skipTarget, setSkipTarget] = useState<{
+    medicationId: string;
+    profileId: string;
+    medicationName: string;
+  } | null>(null);
 
   const nowIso = new Date().toISOString();
 
@@ -199,13 +214,20 @@ export default function TodayDetailScreen() {
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.skipButton}
-                        onPress={() =>
+                        onPress={() => {
+                          // Skip is logged immediately — never blocked by the
+                          // sheet. The sheet appears as an optional follow-up.
                           logAdherence.mutate({
                             medicationId: dose.medication.id,
                             eventType: 'skipped',
                             profileId: dose.medication.profile_id,
-                          })
-                        }
+                          });
+                          setSkipTarget({
+                            medicationId: dose.medication.id,
+                            profileId: dose.medication.profile_id,
+                            medicationName: dose.medication.drug_name,
+                          });
+                        }}
                       >
                         <Text style={styles.skipButtonText}>Skip</Text>
                       </TouchableOpacity>
@@ -487,6 +509,48 @@ export default function TodayDetailScreen() {
             <Text style={styles.allClearSubtitle}>Nothing needs your attention right now.</Text>
           </View>
         )}
+      <SkipReasonSheet
+        visible={!!skipTarget}
+        medicationName={skipTarget?.medicationName ?? ''}
+        busy={logSkipReason.isPending || stopMedication.isPending}
+        onSubmit={(reason, freeformNote) => {
+          if (!skipTarget) return;
+          logSkipReason.mutate({
+            medicationId: skipTarget.medicationId,
+            reason,
+            freeformNote,
+          });
+          setSkipTarget(null);
+        }}
+        onDismiss={() => setSkipTarget(null)}
+        onSuggestRefill={() => {
+          if (!skipTarget) return;
+          // Send the user to the refill helper for the same med.
+          router.push(`/(main)/medications/refill/${skipTarget.medicationId}`);
+        }}
+        onSuggestStop={() => {
+          if (!skipTarget) return;
+          const target = skipTarget;
+          Alert.alert(
+            `Stop ${target.medicationName}?`,
+            'Mark this medication as stopped per your doctor.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Stop medication',
+                style: 'destructive',
+                onPress: () => {
+                  stopMedication.mutate({
+                    medicationId: target.medicationId,
+                    profileId: target.profileId,
+                    reason: 'Doctor told me to stop',
+                  });
+                },
+              },
+            ],
+          );
+        }}
+      />
     </ScreenLayout>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -32,6 +32,8 @@ import {
   useTriggerExtraction,
 } from '@/hooks/useResults';
 import { useProfileDetail } from '@/hooks/useProfileDetail';
+import { useProfileEnrichment } from '@/hooks/useProfileEnrichment';
+import { ProfileEnrichmentCard } from '@/components/ProfileEnrichmentCard';
 import { getEffectiveData } from '@/services/results';
 import {
   generateResultSummary,
@@ -119,6 +121,48 @@ export default function ResultDetailScreen() {
     }
     prevIsExtracting.current = isExtracting;
   }, [isExtracting, resultId, queryClient]);
+
+  // ── Cross-Document Profile Enrichment ──────────────────────────────────
+  // Detection feeds on the result's structured_data plus the columns the
+  // result row exposes directly (facility, ordering_clinician). We pass a
+  // merged view so the detector doesn't need to know about row vs json.
+  const enrichmentExtraction = useMemo<Record<string, unknown> | null>(() => {
+    if (!result) return null;
+    const sd = (result.structured_data ?? {}) as Record<string, unknown>;
+    return {
+      ...sd,
+      facility: result.facility ?? sd.facility ?? null,
+      ordering_clinician: result.ordering_clinician ?? sd.ordering_clinician ?? null,
+      suggested_test_name: sd.suggested_test_name ?? result.test_name,
+    };
+  }, [result]);
+
+  const enrichmentSourceLabel = useMemo(() => {
+    if (!result) return 'result';
+    const date = result.performed_at
+      ? new Date(result.performed_at + 'T00:00:00').toLocaleDateString('en-US', {
+          month: 'short',
+          year: 'numeric',
+        })
+      : null;
+    if (date) return `${result.test_name} from ${date}`;
+    return result.test_name;
+  }, [result]);
+
+  const enrichment = useProfileEnrichment({
+    profileId: result?.profile_id ?? null,
+    householdId: result?.household_id ?? null,
+    sourceType: 'result',
+    sourceId: result ? `result_item_${result.id}` : null,
+    sourceLabel: enrichmentSourceLabel,
+    extractionResult: enrichmentExtraction,
+    existingFacts: profileDetail?.facts,
+    enabled:
+      !isExtracting &&
+      !!result &&
+      result.status !== 'draft' &&
+      result.status !== 'processing',
+  });
 
   // Inline title editing
   const [editingTitle, setEditingTitle] = useState(false);
@@ -466,6 +510,17 @@ export default function ResultDetailScreen() {
               </TouchableOpacity>
             </Card>
           </View>
+        )}
+
+        {/* Profile updates discovered in this result (cross-document enrichment) */}
+        {enrichment.suggestions.length > 0 && (
+          <ProfileEnrichmentCard
+            suggestions={enrichment.suggestions}
+            sourceLabel={enrichmentSourceLabel}
+            onAccept={enrichment.onAccept}
+            onDismiss={enrichment.onDismiss}
+            onDismissAll={enrichment.onDismissAll}
+          />
         )}
 
         {/* Summary section */}

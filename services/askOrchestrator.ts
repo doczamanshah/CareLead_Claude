@@ -11,6 +11,7 @@ import type { AskResponse, ProfileIndex } from '@/lib/types/ask';
 import { routeQuery } from '@/services/askRouter';
 import { executeQuery } from '@/services/askEngine';
 import { runAiFallback } from '@/services/askFallback';
+import { gapActionForUnclassified } from '@/services/askGapActions';
 
 type ServiceResult<T> =
   | { success: true; data: T }
@@ -75,6 +76,9 @@ export async function askProfile(
           'When is my next appointment?',
         ],
         noResults: true,
+        gapAction: gapActionForUnclassified(query, {
+          profileId: params.profileIndex.profileId,
+        }),
       },
     };
   }

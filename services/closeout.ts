@@ -771,10 +771,12 @@ export async function finalizeCloseout(
     return { success: false, error: coError.message, code: coError.code };
   }
 
-  // Mark appointment completed
+  // Mark appointment completed AND flip the post-visit captured flag so the
+  // structured-capture briefing stops nagging the user. Both flows share
+  // this single source of truth.
   const { data: completedAptRow, error: aptUpdateError } = await supabase
     .from('apt_appointments')
-    .update({ status: 'completed' })
+    .update({ status: 'completed', post_visit_captured: true })
     .eq('id', appointment.id)
     .select()
     .single();

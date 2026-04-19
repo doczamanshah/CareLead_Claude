@@ -232,6 +232,26 @@ export interface TimelineCard {
   actions: AnswerCardAction[];
 }
 
+/**
+ * A one-tap entry point offered to the user when their question can't be
+ * answered from the profile. The Ask screen renders a primary button (and
+ * optional secondary) that navigates to the relevant capture/entry screen
+ * with `actionParams` passed as route query params.
+ *
+ * GapAction is rendered both for total-empty responses AND alongside
+ * partial-match responses (e.g., "no Atorvastatin, but here are your meds —
+ * want to add it?").
+ */
+export interface GapAction {
+  message: string;
+  actionLabel: string;
+  actionRoute: string;
+  actionParams?: Record<string, string>;
+  secondaryLabel?: string;
+  secondaryRoute?: string;
+  secondaryParams?: Record<string, string>;
+}
+
 export interface AskResponse {
   query: string;
   shortAnswer: string;
@@ -243,6 +263,7 @@ export interface AskResponse {
   timelines: TimelineCard[];
   suggestedFollowUps: string[];
   noResults: boolean;
+  gapAction: GapAction | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────

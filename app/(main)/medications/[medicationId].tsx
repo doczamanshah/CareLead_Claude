@@ -23,6 +23,12 @@ import {
   useLogAdherence,
 } from '@/hooks/useMedications';
 import { useUpdateSig } from '@/hooks/useMedications';
+import {
+  useMarkRefilled,
+  useRecordRefillChangeCheck,
+  shouldPromptChangeCheck,
+} from '@/hooks/useMedicationRefillCheck';
+import { RefillChangeSheet } from '@/components/RefillChangeSheet';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type {
@@ -87,10 +93,13 @@ export default function MedicationDetailScreen() {
   const updateSupplyMut = useUpdateSupply();
   const updateSigMut = useUpdateSig();
   const logAdherence = useLogAdherence();
+  const markRefilled = useMarkRefilled();
+  const recordChangeCheck = useRecordRefillChangeCheck();
 
   const [isEditing, setIsEditing] = useState(false);
   const [editState, setEditState] = useState<EditState | null>(null);
   const [lastFillDatePicker, setLastFillDatePicker] = useState<Date | null>(null);
+  const [changeSheetVisible, setChangeSheetVisible] = useState(false);
 
   if (isLoading || !med) {
     return (
@@ -494,11 +503,33 @@ export default function MedicationDetailScreen() {
         <View style={styles.section}>
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.sectionTitle}>Refill Info</Text>
-            <TouchableOpacity
-              onPress={() => router.push(`/(main)/medications/refill/${med.id}`)}
-            >
-              <Text style={styles.actionLink}>Start Refill</Text>
-            </TouchableOpacity>
+            <View style={styles.headerActions}>
+              <TouchableOpacity
+                onPress={async () => {
+                  try {
+                    await markRefilled.mutateAsync({
+                      medicationId: med.id,
+                      profileId: med.profile_id,
+                    });
+                    if (shouldPromptChangeCheck(med.id)) {
+                      setChangeSheetVisible(true);
+                    }
+                  } catch {
+                    // surface via mutation state
+                  }
+                }}
+                disabled={markRefilled.isPending}
+              >
+                <Text style={styles.actionLink}>
+                  {markRefilled.isPending ? 'Saving…' : 'Mark refilled'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => router.push(`/(main)/medications/refill/${med.id}`)}
+              >
+                <Text style={styles.actionLink}>Start Refill</Text>
+              </TouchableOpacity>
+            </View>
           </View>
           <Card>
             {supply ? (
@@ -621,6 +652,29 @@ export default function MedicationDetailScreen() {
           </View>
         )}
       </ScrollView>
+
+      <RefillChangeSheet
+        visible={changeSheetVisible}
+        medicationName={med.drug_name}
+        currentDoseText={med.sig?.dose_text ?? null}
+        currentFrequencyText={med.sig?.frequency_text ?? null}
+        currentPharmacyName={med.supply?.pharmacy_name ?? null}
+        busy={recordChangeCheck.isPending}
+        onSubmit={async (changeType, details) => {
+          try {
+            await recordChangeCheck.mutateAsync({
+              medicationId: med.id,
+              profileId: med.profile_id,
+              changeType,
+              details,
+            });
+            setChangeSheetVisible(false);
+          } catch {
+            // surface via mutation state
+          }
+        }}
+        onDismiss={() => setChangeSheetVisible(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -737,6 +791,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
   },
   sectionTitle: {
     fontSize: FONT_SIZES.lg,

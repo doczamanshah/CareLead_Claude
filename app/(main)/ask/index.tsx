@@ -37,6 +37,7 @@ import type {
   AskResponse,
   CanonicalFact,
   FactDomain,
+  GapAction,
   ProfileIndex,
 } from '@/lib/types/ask';
 
@@ -415,6 +416,37 @@ export default function AskScreen() {
     );
   }
 
+  /**
+   * Build a concrete URL from a GapAction route + params. Any `[paramName]`
+   * placeholder in the path is substituted from `params`, and any leftover
+   * params are appended as a query string. This matches the Expo Router
+   * file-based convention: `/profile/[profileId]/add-fact` becomes
+   * `/profile/abc-123/add-fact?category=allergy`.
+   */
+  function buildGapHref(
+    route: string,
+    params: Record<string, string> | undefined,
+  ): string {
+    let href = route;
+    const remaining: Record<string, string> = { ...(params ?? {}) };
+    for (const key of Object.keys(remaining)) {
+      const placeholder = `[${key}]`;
+      if (href.includes(placeholder)) {
+        href = href.replace(placeholder, encodeURIComponent(remaining[key]));
+        delete remaining[key];
+      }
+    }
+    const qs = new URLSearchParams(remaining).toString();
+    return qs ? `${href}?${qs}` : href;
+  }
+
+  function handleGapAction(
+    route: string,
+    params: Record<string, string> | undefined,
+  ) {
+    router.push(buildGapHref(route, params) as never);
+  }
+
   function handleActionPress(action: AnswerCardAction) {
     if (action.type === 'view_source' && action.targetRoute) {
       router.push(action.targetRoute as never);
@@ -681,6 +713,7 @@ export default function AskScreen() {
               exchange={ex}
               onActionPress={handleActionPress}
               onFollowUpPress={sendQuery}
+              onGapAction={handleGapAction}
               onToggleExpand={() => toggleExpanded(ex.id)}
               onRetry={() => retryExchange(ex.id)}
             />
@@ -761,6 +794,7 @@ interface ExchangeBlockProps {
   exchange: Exchange;
   onActionPress: (action: AnswerCardAction) => void;
   onFollowUpPress: (q: string) => void;
+  onGapAction: (route: string, params: Record<string, string> | undefined) => void;
   onToggleExpand: () => void;
   onRetry: () => void;
 }
@@ -769,6 +803,7 @@ function ExchangeBlock({
   exchange,
   onActionPress,
   onFollowUpPress,
+  onGapAction,
   onToggleExpand,
   onRetry,
 }: ExchangeBlockProps) {
@@ -838,7 +873,7 @@ function ExchangeBlock({
           <>
             <Text style={styles.shortAnswer}>{response.shortAnswer}</Text>
 
-            {response.noResults && !hasAnyContent && (
+            {response.noResults && !hasAnyContent && !response.gapAction && (
               <View style={styles.noResultsCard}>
                 <Ionicons
                   name="information-circle-outline"
@@ -850,6 +885,10 @@ function ExchangeBlock({
                   relevant module.
                 </Text>
               </View>
+            )}
+
+            {response.gapAction && (
+              <GapActionCard gap={response.gapAction} onPress={onGapAction} />
             )}
 
             {hasRichFormat && (
@@ -920,6 +959,46 @@ function ExchangeBlock({
           </>
         )}
       </View>
+    </View>
+  );
+}
+
+interface GapActionCardProps {
+  gap: GapAction;
+  onPress: (route: string, params: Record<string, string> | undefined) => void;
+}
+
+/**
+ * Surface a one-tap path from "I don't have that" to the relevant entry
+ * screen. Distinct from the no-results card visually — primary-tinted and
+ * inviting, not greyed-out.
+ */
+function GapActionCard({ gap, onPress }: GapActionCardProps) {
+  return (
+    <View style={styles.gapCard}>
+      <View style={styles.gapHeader}>
+        <View style={styles.gapIconBubble}>
+          <Ionicons name="add-circle-outline" size={18} color={COLORS.primary.DEFAULT} />
+        </View>
+        <Text style={styles.gapMessage}>{gap.message}</Text>
+      </View>
+      <TouchableOpacity
+        style={styles.gapPrimaryButton}
+        activeOpacity={0.8}
+        onPress={() => onPress(gap.actionRoute, gap.actionParams)}
+      >
+        <Text style={styles.gapPrimaryText}>{gap.actionLabel}</Text>
+        <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
+      </TouchableOpacity>
+      {gap.secondaryLabel && gap.secondaryRoute && (
+        <TouchableOpacity
+          style={styles.gapSecondaryButton}
+          activeOpacity={0.7}
+          onPress={() => onPress(gap.secondaryRoute!, gap.secondaryParams)}
+        >
+          <Text style={styles.gapSecondaryText}>{gap.secondaryLabel}</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -1264,6 +1343,60 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.sm,
     color: COLORS.text.secondary,
     lineHeight: 18,
+  },
+
+  // Gap action — primary-tinted invitation, distinct from greyed no-results
+  gapCard: {
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '33',
+    borderRadius: 12,
+    padding: 14,
+    gap: 12,
+  },
+  gapHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  gapIconBubble: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gapMessage: {
+    flex: 1,
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.DEFAULT,
+    lineHeight: 18,
+  },
+  gapPrimaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: COLORS.primary.DEFAULT,
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  gapPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
+  gapSecondaryButton: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  gapSecondaryText: {
+    color: COLORS.primary.DEFAULT,
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
   },
 
   // Cards

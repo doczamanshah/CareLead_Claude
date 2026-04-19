@@ -10,7 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/components/ui/Button';
@@ -35,12 +35,25 @@ function toDateString(date: Date): string {
 
 export default function AddTypedResultScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{
+    resultType?: string;
+    prefillTestName?: string;
+  }>();
   const { activeProfile, activeProfileId } = useActiveProfile();
   const createResult = useCreateResult();
   const triggerExtraction = useTriggerExtraction();
 
-  const [resultType, setResultType] = useState<ResultType>('lab');
-  const [testName, setTestName] = useState('');
+  // Honor Ask gap action prefills: pre-select the type chip and the test
+  // name field. Both are still editable.
+  const initialType: ResultType =
+    params.resultType === 'lab' ||
+    params.resultType === 'imaging' ||
+    params.resultType === 'other'
+      ? params.resultType
+      : 'lab';
+
+  const [resultType, setResultType] = useState<ResultType>(initialType);
+  const [testName, setTestName] = useState(params.prefillTestName ?? '');
   const [performedAt, setPerformedAt] = useState<Date | null>(null);
   const [facility, setFacility] = useState('');
   const [clinician, setClinician] = useState('');

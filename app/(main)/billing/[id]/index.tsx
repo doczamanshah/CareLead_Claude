@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -44,6 +44,9 @@ import {
   useBillingTimeline,
 } from '@/hooks/useBilling';
 import { formatRelativeTime } from '@/lib/utils/relativeTime';
+import { useProfileDetail } from '@/hooks/useProfileDetail';
+import { useProfileEnrichment } from '@/hooks/useProfileEnrichment';
+import { ProfileEnrichmentCard } from '@/components/ProfileEnrichmentCard';
 import type { TimelineEvent, TimelineEventType } from '@/services/billingTimeline';
 import { computePaymentSummary } from '@/services/billing';
 import {
@@ -138,6 +141,60 @@ export default function BillingCaseDetailScreen() {
   const extractionCompleted = (billingCase?.last_extracted_at ?? null) !== null;
   const hasCase = !!billingCase;
   const lastReconciledAt = billingCase?.last_reconciled_at ?? null;
+
+  // ── Cross-Document Profile Enrichment ──────────────────────────────────
+  // Pull existing profile facts to suppress duplicates.
+  const { data: profileDetail } = useProfileDetail(billingCase?.profile_id ?? null);
+
+  // Merge case-level fields with each document's `extracted_json` so the
+  // detector sees everything in one shape. Case-level fields are the
+  // authoritative source after the Edge Function reconciles extraction
+  // back into the case row.
+  const billingExtractionResult = useMemo<Record<string, unknown> | null>(() => {
+    if (!billingCase) return null;
+    const merged: Record<string, unknown> = {
+      provider_name: billingCase.provider_name,
+      payer_name: billingCase.payer_name,
+    };
+    for (const doc of documents ?? []) {
+      const ej = doc.extracted_json;
+      if (!ej || typeof ej !== 'object') continue;
+      const e = ej as Record<string, unknown>;
+      if (!merged.provider_name && e.provider_name) merged.provider_name = e.provider_name;
+      if (!merged.payer_name && e.payer_name) merged.payer_name = e.payer_name;
+      if (!merged.member_id && e.member_id) merged.member_id = e.member_id;
+      if (!merged.group_number && e.group_number) merged.group_number = e.group_number;
+      if (!merged.plan_name && e.plan_name) merged.plan_name = e.plan_name;
+      if (!merged.denial_info && e.denial_info) merged.denial_info = e.denial_info;
+    }
+    return merged;
+  }, [billingCase, documents]);
+
+  const billingSourceLabel = useMemo(() => {
+    if (!billingCase) return 'bill';
+    const date = billingCase.service_date_start
+      ? new Date(billingCase.service_date_start + 'T00:00:00').toLocaleDateString('en-US', {
+          month: 'short',
+          year: 'numeric',
+        })
+      : null;
+    const provider = billingCase.provider_name;
+    if (provider && date) return `${provider} bill from ${date}`;
+    if (provider) return `${provider} bill`;
+    if (date) return `bill from ${date}`;
+    return 'bill';
+  }, [billingCase]);
+
+  const enrichment = useProfileEnrichment({
+    profileId: billingCase?.profile_id ?? null,
+    householdId: billingCase?.household_id ?? null,
+    sourceType: 'billing',
+    sourceId: billingCase ? `billing_case_${billingCase.id}` : null,
+    sourceLabel: billingSourceLabel,
+    extractionResult: billingExtractionResult,
+    existingFacts: profileDetail?.facts,
+    enabled: extractionCompleted && !isExtracting,
+  });
 
   // When extraction finishes, refresh cached data and re-run reconciliation.
   const prevIsExtracting = useRef(false);
@@ -666,6 +723,17 @@ export default function BillingCaseDetailScreen() {
             ))
           )}
         </View>
+
+        {/* Profile updates discovered in this case (cross-document enrichment) */}
+        {enrichment.suggestions.length > 0 && (
+          <ProfileEnrichmentCard
+            suggestions={enrichment.suggestions}
+            sourceLabel={billingSourceLabel}
+            onAccept={enrichment.onAccept}
+            onDismiss={enrichment.onDismiss}
+            onDismissAll={enrichment.onDismissAll}
+          />
+        )}
 
         {/* What We Found (findings) */}
         <FindingsSection

@@ -5,7 +5,7 @@ import {
   StyleSheet,
   ScrollView,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '@/lib/constants/colors';
@@ -45,6 +45,13 @@ const OPTIONS: Option[] = [
 
 export default function AddResultScreen() {
   const router = useRouter();
+  const { resultType } = useLocalSearchParams<{ resultType?: string }>();
+
+  // When opened from an Ask gap action like "Add a lab result", forward the
+  // type hint so the chosen entry mode opens with the right preset.
+  const optionParams = resultType
+    ? `?resultType=${encodeURIComponent(resultType)}`
+    : '';
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
@@ -66,7 +73,7 @@ export default function AddResultScreen() {
             key={opt.key}
             style={styles.optionCard}
             activeOpacity={0.7}
-            onPress={() => router.push(opt.route as never)}
+            onPress={() => router.push((opt.route + optionParams) as never)}
           >
             <View style={styles.optionIconCircle}>
               <Ionicons name={opt.icon} size={26} color={COLORS.primary.DEFAULT} />

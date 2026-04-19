@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import {
@@ -228,6 +229,48 @@ export default function AppointmentDetailScreen() {
           </Card>
         )}
 
+        {/* "How did it go?" — past + uncaptured + not cancelled/rescheduled.
+            Surfaced prominently because the recall window is short. */}
+        {!appointment.post_visit_captured &&
+          appointment.status !== 'cancelled' &&
+          appointment.status !== 'rescheduled' &&
+          new Date(appointment.start_time).getTime() < Date.now() && (
+          <Card style={styles.howItWentCard}>
+            <View style={styles.howItWentHeader}>
+              <Ionicons name="sparkles" size={20} color={COLORS.accent.dark} />
+              <Text style={styles.howItWentTitle}>How did it go?</Text>
+            </View>
+            <Text style={styles.howItWentBody}>
+              A two-minute debrief while it&rsquo;s fresh — capture new meds,
+              referrals, follow-ups, and anything else that changed.
+            </Text>
+            <View style={{ marginTop: 12 }}>
+              <Button
+                title="Capture visit details"
+                onPress={() =>
+                  router.push(
+                    `/(main)/appointments/${appointmentId}/post-visit-capture`,
+                  )
+                }
+              />
+            </View>
+          </Card>
+        )}
+
+        {/* Already captured — quiet confirmation. */}
+        {appointment.post_visit_captured && appointment.status === 'completed' && (
+          <Card style={styles.capturedCard}>
+            <View style={styles.howItWentHeader}>
+              <Ionicons
+                name="checkmark-circle"
+                size={20}
+                color={COLORS.success.DEFAULT}
+              />
+              <Text style={styles.capturedTitle}>Visit captured</Text>
+            </View>
+          </Card>
+        )}
+
         {/* Visit Prep card */}
         <Text style={styles.sectionLabel}>Visit Prep</Text>
         {hasPrep && prep ? (
@@ -357,13 +400,15 @@ export default function AppointmentDetailScreen() {
           </View>
         )}
 
-        {/* Closeout action — only for non-completed, non-cancelled appointments */}
+        {/* Deeper closeout path — upload after-visit summary + AI extraction.
+            Only the secondary path now; the primary capture lives in
+            "How did it go?" above. */}
         {appointment.status !== 'cancelled' &&
           appointment.status !== 'completed' &&
           appointment.status !== 'rescheduled' && (
           <View style={styles.actionSection}>
             <Button
-              title="Start Closeout"
+              title="Upload after-visit summary"
               variant="outline"
               onPress={() => {
                 router.push(`/(main)/appointments/${appointmentId}/closeout`);
@@ -548,6 +593,39 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   actionSection: { marginBottom: 24 },
+  howItWentCard: {
+    marginBottom: 20,
+    backgroundColor: COLORS.accent.DEFAULT + '14',
+    borderWidth: 1,
+    borderColor: COLORS.accent.DEFAULT + '40',
+  },
+  howItWentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  howItWentTitle: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  howItWentBody: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    lineHeight: 20,
+    marginTop: 8,
+  },
+  capturedCard: {
+    marginBottom: 20,
+    backgroundColor: COLORS.success.DEFAULT + '0D',
+    borderWidth: 1,
+    borderColor: COLORS.success.DEFAULT + '33',
+  },
+  capturedTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
   summaryBodyText: {
     fontSize: FONT_SIZES.sm,
     color: COLORS.text.DEFAULT,

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import {
+  Alert,
   View,
   Text,
   ScrollView,
@@ -10,6 +11,7 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/components/ui/Card';
+import { SkipReasonSheet } from '@/components/SkipReasonSheet';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import {
   useMedications,
@@ -17,6 +19,10 @@ import {
   useRefillStatus,
   useLogAdherence,
 } from '@/hooks/useMedications';
+import {
+  useLogSkipReason,
+  useStopMedication,
+} from '@/hooks/useMedicationRefillCheck';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { MedicationWithDetails, TodaysDose, RefillInfo, RefillStatus } from '@/lib/types/medications';
@@ -42,7 +48,16 @@ export default function MedicationsScreen() {
   const { data: todaysDoses } = useTodaysDoses(activeProfileId);
   const { data: refills } = useRefillStatus(activeProfileId);
   const logAdherence = useLogAdherence();
+  const logSkipReason = useLogSkipReason();
+  const stopMedication = useStopMedication();
   const [showInactive, setShowInactive] = useState(false);
+  // Skip target survives the skip mutation so the optional reason sheet can
+  // appear without blocking the skip action itself.
+  const [skipTarget, setSkipTarget] = useState<{
+    medicationId: string;
+    profileId: string;
+    medicationName: string;
+  } | null>(null);
 
   const activeMeds = (medications ?? []).filter((m) => m.status === 'active');
   const inactiveMeds = (medications ?? []).filter((m) => m.status !== 'active');
@@ -120,6 +135,11 @@ export default function MedicationsScreen() {
                     eventType: 'skipped',
                     profileId: dose.medication.profile_id,
                     scheduledTime: dose.scheduledTime ?? undefined,
+                  });
+                  setSkipTarget({
+                    medicationId: dose.medication.id,
+                    profileId: dose.medication.profile_id,
+                    medicationName: dose.medication.drug_name,
                   });
                 }}
                 onPress={() => router.push(`/(main)/medications/${dose.medication.id}`)}
@@ -213,6 +233,48 @@ export default function MedicationsScreen() {
       >
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
+
+      <SkipReasonSheet
+        visible={!!skipTarget}
+        medicationName={skipTarget?.medicationName ?? ''}
+        busy={logSkipReason.isPending || stopMedication.isPending}
+        onSubmit={(reason, freeformNote) => {
+          if (!skipTarget) return;
+          logSkipReason.mutate({
+            medicationId: skipTarget.medicationId,
+            reason,
+            freeformNote,
+          });
+          setSkipTarget(null);
+        }}
+        onDismiss={() => setSkipTarget(null)}
+        onSuggestRefill={() => {
+          if (!skipTarget) return;
+          router.push(`/(main)/medications/refill/${skipTarget.medicationId}`);
+        }}
+        onSuggestStop={() => {
+          if (!skipTarget) return;
+          const target = skipTarget;
+          Alert.alert(
+            `Stop ${target.medicationName}?`,
+            'Mark this medication as stopped per your doctor.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Stop medication',
+                style: 'destructive',
+                onPress: () => {
+                  stopMedication.mutate({
+                    medicationId: target.medicationId,
+                    profileId: target.profileId,
+                    reason: 'Doctor told me to stop',
+                  });
+                },
+              },
+            ],
+          );
+        }}
+      />
     </SafeAreaView>
   );
 }

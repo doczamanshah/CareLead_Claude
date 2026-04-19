@@ -57,6 +57,12 @@ export interface Appointment {
   updated_at: string;
   deleted_at: string | null;
   prep_json: VisitPrep | null;
+  /**
+   * True when the structured post-visit capture flow has been completed
+   * (or the legacy closeout wizard finalized). Briefings surface past
+   * uncaptured appointments as high-priority "How did it go?" prompts.
+   */
+  post_visit_captured: boolean;
 }
 
 // ── Visit Prep ─────────────────────────────────────────────────────────────

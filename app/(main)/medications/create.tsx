@@ -12,7 +12,7 @@ import {
   ActivityIndicator,
   StyleSheet,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Input } from '@/components/ui/Input';
 import { DatePicker } from '@/components/ui/DatePicker';
@@ -112,16 +112,26 @@ function parseRoute(text: string): MedicationRoute | null {
 
 export default function CreateMedicationScreen() {
   const router = useRouter();
+  const { prefillName } = useLocalSearchParams<{ prefillName?: string }>();
   const { activeProfileId } = useActiveProfile();
   const createMedication = useCreateMedication();
   const createNoteMutation = useCreateNoteArtifact();
   const extractionMutation = useTriggerExtraction();
 
-  const [step, setStep] = useState<Step>('input');
+  // When opened via Ask gap action with a name (e.g., "Atorvastatin"), skip
+  // the AI-extraction input step and drop straight onto the form with the
+  // drug name pre-filled. The user can adjust other fields directly.
+  const initialStep: Step = prefillName ? 'form' : 'input';
+  const initialFields: ExtractedFields = prefillName
+    ? { ...EMPTY_FIELDS, drug_name: prefillName }
+    : { ...EMPTY_FIELDS };
+  const initialFilledKeys = prefillName ? new Set(['drug_name']) : new Set<string>();
+
+  const [step, setStep] = useState<Step>(initialStep);
   const [freeText, setFreeText] = useState('');
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [fields, setFields] = useState<ExtractedFields>({ ...EMPTY_FIELDS });
-  const [aiFilledKeys, setAiFilledKeys] = useState<Set<string>>(new Set());
+  const [fields, setFields] = useState<ExtractedFields>(initialFields);
+  const [aiFilledKeys, setAiFilledKeys] = useState<Set<string>>(initialFilledKeys);
   const [showSupply, setShowSupply] = useState(false);
   const [lastFillDatePicker, setLastFillDatePicker] = useState<Date | null>(null);
   const inputRef = useRef<TextInput>(null);

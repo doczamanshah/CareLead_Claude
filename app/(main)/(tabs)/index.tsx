@@ -26,9 +26,11 @@ import {
 } from '@/hooks/useBilling';
 import { useResults, useResultsBriefing } from '@/hooks/useResults';
 import { usePreventiveItems, usePreventiveBriefing } from '@/hooks/usePreventive';
+import { usePostVisitBriefing } from '@/hooks/usePostVisitCapture';
 import type { BillingBriefingItem } from '@/services/billingBriefing';
 import type { ResultsBriefingItem } from '@/services/resultsBriefing';
 import type { PreventiveBriefingItem } from '@/services/preventiveBriefing';
+import type { PostVisitBriefingItem } from '@/services/postVisitBriefing';
 import { needsMedicationMigration, migrateMedicationFacts } from '@/services/medicationMigration';
 import {
   enableBiometricForUser,
@@ -115,6 +117,7 @@ export default function HomeScreen() {
   const { data: resultsBriefing } = useResultsBriefing(activeProfileId, 2);
   const { data: preventiveItems } = usePreventiveItems(activeProfileId);
   const { data: preventiveBriefing } = usePreventiveBriefing(activeProfileId, 2);
+  const { data: postVisitBriefing } = usePostVisitBriefing(activeProfileId, 3);
 
   // One-time biometric enrollment prompt per user on this device
   const biometricPromptRef = useRef<string | null>(null);
@@ -256,6 +259,7 @@ export default function HomeScreen() {
     const billingItems: BillingBriefingItem[] = billingBriefing ?? [];
     const resultsItems: ResultsBriefingItem[] = resultsBriefing ?? [];
     const preventiveItems: PreventiveBriefingItem[] = preventiveBriefing ?? [];
+    const postVisitItems: PostVisitBriefingItem[] = postVisitBriefing ?? [];
 
     const nothingDue =
       !hasMeds &&
@@ -265,7 +269,8 @@ export default function HomeScreen() {
       attentionCount === 0 &&
       billingItems.length === 0 &&
       resultsItems.length === 0 &&
-      preventiveItems.length === 0;
+      preventiveItems.length === 0 &&
+      postVisitItems.length === 0;
 
     const briefingLineCount =
       (hasMeds ? 1 : 0) +
@@ -274,7 +279,8 @@ export default function HomeScreen() {
       (attentionCount > 0 ? 1 : 0) +
       billingItems.length +
       resultsItems.length +
-      preventiveItems.length;
+      preventiveItems.length +
+      postVisitItems.length;
 
     return {
       hasMeds,
@@ -287,10 +293,11 @@ export default function HomeScreen() {
       billingItems,
       resultsItems,
       preventiveItems,
+      postVisitItems,
       nothingDue,
       briefingLineCount,
     };
-  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing, preventiveBriefing]);
+  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing, preventiveBriefing, postVisitBriefing]);
 
   // Module stats
   const moduleStats = useMemo(() => {
@@ -460,6 +467,34 @@ export default function HomeScreen() {
                   </>
                 ) : (
                   <View style={styles.briefingLines}>
+                    {/* Post-visit prompts come first — golden 24h recall window. */}
+                    {briefing.postVisitItems.map((item) => {
+                      const tintColor =
+                        item.color === 'critical'
+                          ? COLORS.error.DEFAULT
+                          : COLORS.accent.dark;
+                      return (
+                        <TouchableOpacity
+                          key={item.key}
+                          style={styles.briefingLine}
+                          activeOpacity={0.7}
+                          onPress={(e) => {
+                            e.stopPropagation?.();
+                            router.push(
+                              `/(main)/appointments/${item.appointmentId}/post-visit-capture`,
+                            );
+                          }}
+                        >
+                          <Ionicons name="sparkles" size={18} color={tintColor} />
+                          <Text
+                            style={[styles.briefingLineText, { color: tintColor }]}
+                            numberOfLines={2}
+                          >
+                            {item.message}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
                     {briefing.hasMeds && (
                       <View style={styles.briefingLine}>
                         <Ionicons name="medical" size={18} color={COLORS.primary.DEFAULT} />

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -10,9 +11,15 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { RefillChangeSheet } from '@/components/RefillChangeSheet';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useMedicationDetail } from '@/hooks/useMedications';
 import { useCreateTask } from '@/hooks/useTasks';
+import {
+  useMarkRefilled,
+  useRecordRefillChangeCheck,
+  shouldPromptChangeCheck,
+} from '@/hooks/useMedicationRefillCheck';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 
@@ -22,6 +29,13 @@ export default function RefillScreen() {
   const { activeProfile } = useActiveProfile();
   const { data: med, isLoading } = useMedicationDetail(medicationId ?? null);
   const createTask = useCreateTask();
+  const markRefilled = useMarkRefilled();
+  const recordChangeCheck = useRecordRefillChangeCheck();
+
+  // Sheet visibility — opened after the user marks a refill picked up,
+  // gated by the 30-day cooldown so weekly-refill meds aren't re-prompted.
+  const [changeSheetVisible, setChangeSheetVisible] = useState(false);
+  const [showRefillSavedToast, setShowRefillSavedToast] = useState(false);
 
   if (isLoading || !med) {
     return (
@@ -134,6 +148,25 @@ export default function RefillScreen() {
     });
   };
 
+  const handleMarkRefilled = async () => {
+    if (!med) return;
+    try {
+      await markRefilled.mutateAsync({
+        medicationId: med.id,
+        profileId: med.profile_id,
+      });
+      // Brief visual ack, then open the change-detection sheet (or skip if
+      // we're inside the cooldown window).
+      setShowRefillSavedToast(true);
+      setTimeout(() => setShowRefillSavedToast(false), 2000);
+      if (shouldPromptChangeCheck(med.id)) {
+        setChangeSheetVisible(true);
+      }
+    } catch {
+      // Mutation surfaces its own error state via isError; nothing to do here.
+    }
+  };
+
   const handleShare = async () => {
     const shareText = [
       `Refill Request: ${med.drug_name}${med.strength ? ` ${med.strength}` : ''}`,
@@ -234,7 +267,20 @@ export default function RefillScreen() {
         {/* Actions */}
         <View style={styles.actions}>
           <Button
+            title="I picked up the refill"
+            onPress={handleMarkRefilled}
+            loading={markRefilled.isPending}
+            size="lg"
+          />
+          {showRefillSavedToast && (
+            <View style={styles.savedToast}>
+              <Text style={styles.savedToastText}>Refill recorded ✓</Text>
+            </View>
+          )}
+          <View style={styles.actionSpacer} />
+          <Button
             title="Create Refill Tasks"
+            variant="outline"
             onPress={handleCreateTasks}
             loading={createTask.isPending}
             size="lg"
@@ -248,6 +294,31 @@ export default function RefillScreen() {
           />
         </View>
       </ScrollView>
+
+      {med && (
+        <RefillChangeSheet
+          visible={changeSheetVisible}
+          medicationName={med.drug_name}
+          currentDoseText={med.sig?.dose_text ?? null}
+          currentFrequencyText={med.sig?.frequency_text ?? null}
+          currentPharmacyName={med.supply?.pharmacy_name ?? null}
+          busy={recordChangeCheck.isPending}
+          onSubmit={async (changeType, details) => {
+            try {
+              await recordChangeCheck.mutateAsync({
+                medicationId: med.id,
+                profileId: med.profile_id,
+                changeType,
+                details,
+              });
+              setChangeSheetVisible(false);
+            } catch {
+              // Mutation surfaces error; keep sheet open for user to retry.
+            }
+          }}
+          onDismiss={() => setChangeSheetVisible(false)}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -390,4 +461,13 @@ const styles = StyleSheet.create({
     marginTop: 32,
   },
   actionSpacer: { height: 12 },
+  savedToast: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  savedToastText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.success.DEFAULT,
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
 });

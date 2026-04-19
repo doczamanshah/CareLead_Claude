@@ -17,6 +17,7 @@ import type {
   FactDomain,
   FactProvenance,
   FlagColor,
+  GapAction,
   ProfileIndex,
   SummaryListCard,
   SummaryListItem,
@@ -31,6 +32,7 @@ import type {
 import type { AskIntent, AskQueryType } from '@/services/askIntents';
 import type { RoutedQuery } from '@/services/askRouter';
 import { formatLabValue } from '@/lib/utils/formatLabValue';
+import { gapActionForIntent, gapActionForUnclassified } from '@/services/askGapActions';
 
 // ── Utilities ──────────────────────────────────────────────────────────────
 
@@ -387,6 +389,7 @@ function blankResponse(query: string, shortAnswer: string): AskResponse {
     timelines: [],
     suggestedFollowUps: [],
     noResults: false,
+    gapAction: null,
   };
 }
 
@@ -394,12 +397,29 @@ function emptyResponse(
   query: string,
   shortAnswer: string,
   suggestedFollowUps: string[] = [],
+  gapAction: GapAction | null = null,
 ): AskResponse {
   return {
     ...blankResponse(query, shortAnswer),
     suggestedFollowUps,
     noResults: true,
+    gapAction,
   };
+}
+
+/** Convenience: build an empty response with the standard intent gap action. */
+function emptyResponseForIntent(
+  query: string,
+  shortAnswer: string,
+  intent: AskIntent,
+  profileIndex: ProfileIndex,
+  options: { entity?: string | null; followUps?: string[] } = {},
+): AskResponse {
+  const gap = gapActionForIntent(intent, {
+    profileId: profileIndex.profileId,
+    entity: options.entity ?? null,
+  });
+  return emptyResponse(query, shortAnswer, options.followUps ?? [], gap);
 }
 
 // ── Lab panel grouping (table format) ──────────────────────────────────────
@@ -884,6 +904,106 @@ function buildAppointmentsTimeline(facts: CanonicalFact[]): TimelineCard {
   };
 }
 
+// ── Partial-match responses ────────────────────────────────────────────────
+//
+// These fire when the user names a specific entity (e.g., "What's my
+// Atorvastatin dose?", "What's my TSH?") and we don't have THAT entity but
+// DO have other facts in the same domain. The response shows the existing
+// list for context AND attaches a gap action that pre-fills the missing
+// name — turning "I don't have that" into "here's what you have, want to
+// add the missing one?".
+
+function buildPartialMatchMedicationResponse(
+  routed: RoutedQuery,
+  index: ProfileIndex,
+  intent: AskIntent,
+): AskResponse {
+  const meds = factsByDomain(index, 'medications');
+  const entity = routed.entity ?? null;
+  const entityLabel = entity
+    ? entity.split(/\s+/).map((p) => (p ? p[0].toUpperCase() + p.slice(1) : p)).join(' ')
+    : null;
+  const gap = gapActionForIntent(intent, {
+    profileId: index.profileId,
+    entity,
+  });
+
+  if (meds.length === 0) {
+    return emptyResponse(
+      routed.originalQuery,
+      entityLabel
+        ? `${entityLabel} isn't in your medication list, and you don't have any other medications on file yet.`
+        : "You don't have any medications on file yet.",
+      [],
+      gap,
+    );
+  }
+
+  const sorted = sortForListAll(meds);
+  const summary = buildMedicationSummary(sorted);
+  const names = sorted.slice(0, 3).map((f) => f.displayName);
+  const nameList =
+    sorted.length <= 3 ? names.join(', ') : `${names.join(', ')}, and ${sorted.length - 3} more`;
+  const shortAnswer = entityLabel
+    ? `I don't see ${entityLabel} in your medication list. You're currently taking: ${nameList}.`
+    : `That medication isn't in your list. You're currently taking: ${nameList}.`;
+
+  return {
+    ...blankResponse(routed.originalQuery, shortAnswer),
+    summaryLists: [summary],
+    suggestedFollowUps: suggestFollowUps('medications', sorted[0].displayName, 'list_all'),
+    noResults: true,
+    gapAction: gap,
+  };
+}
+
+function buildPartialMatchLabResponse(
+  routed: RoutedQuery,
+  index: ProfileIndex,
+  intent: AskIntent,
+): AskResponse {
+  const labs = factsByDomain(index, 'labs');
+  const entity = routed.entity ?? null;
+  const entityLabel = entity ? entity.toUpperCase() : null;
+  const gap = gapActionForIntent(intent, {
+    profileId: index.profileId,
+    entity,
+  });
+
+  if (labs.length === 0) {
+    return emptyResponse(
+      routed.originalQuery,
+      entityLabel
+        ? `No ${entityLabel} results found. You don't have any other lab results on file yet either.`
+        : 'No lab results found in your profile.',
+      [],
+      gap,
+    );
+  }
+
+  // Pull recent distinct test names from existing labs to give context.
+  const recentNames = new Set<string>();
+  const sortedLabs = [...labs].sort(compareByDateDesc);
+  for (const f of sortedLabs) {
+    const v = f.value as Record<string, unknown> | null;
+    const parent = (v?.parentTestName as string | null) ?? null;
+    if (parent) recentNames.add(parent);
+    if (recentNames.size >= 5) break;
+  }
+  const labelList = Array.from(recentNames).slice(0, 3).join(', ');
+
+  const shortAnswer = entityLabel
+    ? `No ${entityLabel} results found. Your most recent labs include: ${labelList || 'other panels'}.`
+    : 'I don\'t have that result. Here are your recent labs.';
+
+  return {
+    ...blankResponse(routed.originalQuery, shortAnswer),
+    suggestedFollowUps: suggestFollowUps('labs', null, intent.queryType),
+    noResults: true,
+    gapAction: gap,
+  };
+}
+
 // ── Query executors ────────────────────────────────────────────────────────
 
 function executeListAll(
@@ -1066,10 +1186,12 @@ function executeListAll(
     const imagingCards: AnswerCard[] = imaging.map(buildCardFromFact);
 
     if (tableCards.length === 0 && orphanCards.length === 0 && imagingCards.length === 0) {
-      return emptyResponse(
+      return emptyResponseForIntent(
         routed.originalQuery,
         `No ${domainLabelPlural(intent.domain)} found in your profile.`,
-        suggestFollowUps(intent.domain, null, 'list_all'),
+        intent,
+        index,
+        { followUps: suggestFollowUps(intent.domain, null, 'list_all') },
       );
     }
 
@@ -1093,10 +1215,12 @@ function executeListAll(
   const cards = sorted.map(buildCardFromFact);
 
   if (cards.length === 0) {
-    return emptyResponse(
+    return emptyResponseForIntent(
       routed.originalQuery,
       `No ${domainLabelPlural(intent.domain)} found in your profile.`,
-      suggestFollowUps(intent.domain, null, 'list_all'),
+      intent,
+      index,
+      { followUps: suggestFollowUps(intent.domain, null, 'list_all') },
     );
   }
 
@@ -1126,20 +1250,24 @@ function executeGetLatest(
     let shortAnswer: string;
     if (intent.direction === 'upcoming') {
       if (timeline.upcoming.length === 0) {
-        return emptyResponse(
+        return emptyResponseForIntent(
           routed.originalQuery,
           'No upcoming appointments on your calendar.',
-          suggestFollowUps('appointments', null, 'get_latest'),
+          intent,
+          index,
+          { followUps: suggestFollowUps('appointments', null, 'get_latest') },
         );
       }
       const next = timeline.upcoming[0];
       shortAnswer = `Your next appointment is ${next.date}${next.label ? ` with ${next.label}` : ''}.`;
     } else if (intent.direction === 'past') {
       if (timeline.past.length === 0) {
-        return emptyResponse(
+        return emptyResponseForIntent(
           routed.originalQuery,
           "I don't have a record of a past appointment.",
-          suggestFollowUps('appointments', null, 'get_latest'),
+          intent,
+          index,
+          { followUps: suggestFollowUps('appointments', null, 'get_latest') },
         );
       }
       const last = timeline.past[0];
@@ -1179,10 +1307,21 @@ function executeGetLatest(
   const latest = facts[0];
   if (!latest) {
     const entityPart = routed.entity ? `${routed.entity} ` : '';
-    return emptyResponse(
+    // Partial-match: user named a specific lab/entity that isn't on file.
+    // If other labs DO exist, show them as a summary list alongside the gap
+    // action — gives the user context plus a one-tap route to add the missing one.
+    if (intent.domain === 'labs' && routed.entity) {
+      return buildPartialMatchLabResponse(routed, index, intent);
+    }
+    return emptyResponseForIntent(
       routed.originalQuery,
       `I don't have a record of ${entityPart}${domainLabelSingular(intent.domain)} in your profile.`,
-      suggestFollowUps(intent.domain, null, 'get_latest'),
+      intent,
+      index,
+      {
+        entity: routed.entity,
+        followUps: suggestFollowUps(intent.domain, null, 'get_latest'),
+      },
     );
   }
 
@@ -1239,10 +1378,12 @@ function executeGetSpecific(
   intent: AskIntent,
 ): AskResponse {
   if (!routed.entity) {
-    return emptyResponse(
+    return emptyResponseForIntent(
       routed.originalQuery,
       `Which ${domainLabelSingular(intent.domain)}? Try naming the one you're asking about.`,
-      suggestFollowUps(intent.domain, null, 'get_specific'),
+      intent,
+      index,
+      { followUps: suggestFollowUps(intent.domain, null, 'get_specific') },
     );
   }
 
@@ -1251,10 +1392,21 @@ function executeGetSpecific(
   );
   const fact = facts[0];
   if (!fact) {
-    return emptyResponse(
+    // Partial-match: medication user asked about isn't in their list, but
+    // others may be. Show the existing list for context plus a one-tap
+    // gap action prefilled with the missing name.
+    if (intent.domain === 'medications') {
+      return buildPartialMatchMedicationResponse(routed, index, intent);
+    }
+    return emptyResponseForIntent(
       routed.originalQuery,
       `I don't have ${routed.entity} in your profile.`,
-      suggestFollowUps(intent.domain, null, 'get_specific'),
+      intent,
+      index,
+      {
+        entity: routed.entity,
+        followUps: suggestFollowUps(intent.domain, null, 'get_specific'),
+      },
     );
   }
 
@@ -1294,10 +1446,12 @@ function executeGetHistory(
   intent: AskIntent,
 ): AskResponse {
   if (!routed.entity) {
-    return emptyResponse(
+    return emptyResponseForIntent(
       routed.originalQuery,
       `Which ${domainLabelSingular(intent.domain)}? Try naming it (e.g., "A1C history").`,
-      suggestFollowUps(intent.domain, null, 'get_history'),
+      intent,
+      index,
+      { followUps: suggestFollowUps(intent.domain, null, 'get_history') },
     );
   }
 
@@ -1307,11 +1461,7 @@ function executeGetHistory(
     .sort(compareByDateDesc);
 
   if (matched.length === 0) {
-    return emptyResponse(
-      routed.originalQuery,
-      `I don't have any ${routed.entity} results in your profile.`,
-      suggestFollowUps(intent.domain, null, 'get_history'),
-    );
+    return buildPartialMatchLabResponse(routed, index, intent);
   }
 
   // Single analyte requested — build a trend chart.
@@ -1426,6 +1576,10 @@ function executeGetCount(
     ),
     suggestedFollowUps: suggestFollowUps(intent.domain, null, 'get_count'),
     noResults: count === 0,
+    gapAction:
+      count === 0
+        ? gapActionForIntent(intent, { profileId: index.profileId })
+        : null,
   };
 }
 
@@ -1443,6 +1597,9 @@ export function executeQuery({ routedQuery, profileIndex }: ExecuteQueryParams):
       routedQuery.originalQuery,
       "I'm not sure how to answer that from your profile yet.",
       [],
+      gapActionForUnclassified(routedQuery.originalQuery, {
+        profileId: profileIndex.profileId,
+      }),
     );
   }
 

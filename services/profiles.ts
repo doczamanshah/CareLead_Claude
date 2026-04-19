@@ -208,6 +208,46 @@ export async function addProfileFact(
 }
 
 /**
+ * Create a profile fact from a document-derived enrichment suggestion.
+ *
+ * Differs from `addProfileFact` in two ways: source_type is `document`
+ * (not `manual`) and verification_status is `unverified` so the fact carries
+ * its provenance forward. The enrichment flow needs this distinction because
+ * the user only confirmed "yes, add this" — they did not re-verify the value.
+ */
+export async function createProfileFactFromEnrichment(
+  profileId: string,
+  userId: string,
+  fact: {
+    category: ProfileFact['category'];
+    field_key: string;
+    value_json: Record<string, unknown>;
+    source_ref: string;
+  },
+): Promise<ServiceResult<ProfileFact>> {
+  const { data, error } = await supabase
+    .from('profile_facts')
+    .insert({
+      profile_id: profileId,
+      category: fact.category,
+      field_key: fact.field_key,
+      value_json: fact.value_json,
+      source_type: 'document',
+      source_ref: fact.source_ref,
+      verification_status: 'unverified',
+      actor_id: userId,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return { success: false, error: error.message, code: error.code };
+  }
+
+  return { success: true, data: data as ProfileFact };
+}
+
+/**
  * Delete a profile fact (soft delete).
  */
 export async function deleteProfileFact(
