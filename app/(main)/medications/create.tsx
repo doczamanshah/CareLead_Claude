@@ -21,6 +21,7 @@ import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useCreateMedication } from '@/hooks/useMedications';
 import { useCreateNoteArtifact } from '@/hooks/useArtifacts';
 import { useTriggerExtraction } from '@/hooks/useIntentSheet';
+import { useDispatchLifeEventTriggers } from '@/hooks/useLifeEventTriggers';
 import { checkForDuplicateMedication } from '@/services/medications';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
@@ -113,7 +114,8 @@ function parseRoute(text: string): MedicationRoute | null {
 export default function CreateMedicationScreen() {
   const router = useRouter();
   const { prefillName } = useLocalSearchParams<{ prefillName?: string }>();
-  const { activeProfileId } = useActiveProfile();
+  const { activeProfileId, activeProfile } = useActiveProfile();
+  const dispatchLifeEvent = useDispatchLifeEventTriggers();
   const createMedication = useCreateMedication();
   const createNoteMutation = useCreateNoteArtifact();
   const extractionMutation = useTriggerExtraction();
@@ -304,6 +306,7 @@ export default function CreateMedicationScreen() {
 
     const isPrn = fields.frequency === 'as_needed';
 
+    const prescriberName = fields.prescriber_name.trim();
     createMedication.mutate(
       {
         profile_id: activeProfileId,
@@ -318,7 +321,7 @@ export default function CreateMedicationScreen() {
           : fields.frequency_text.trim() || undefined,
         instructions: fields.instructions.trim() || undefined,
         pharmacy_name: fields.pharmacy_name.trim() || undefined,
-        prescriber_name: fields.prescriber_name.trim() || undefined,
+        prescriber_name: prescriberName || undefined,
         last_fill_date: lastFillDatePicker
           ? lastFillDatePicker.toISOString().split('T')[0]
           : fields.last_fill_date.trim() || undefined,
@@ -326,7 +329,21 @@ export default function CreateMedicationScreen() {
         refills_remaining: fields.refills_remaining ? Number(fields.refills_remaining) : undefined,
       },
       {
-        onSuccess: () => router.back(),
+        onSuccess: (medication) => {
+          if (activeProfile?.household_id) {
+            void dispatchLifeEvent(
+              'medication_added',
+              {
+                medicationId: medication.id,
+                drugName: fields.drug_name.trim(),
+                prescriberName: prescriberName || null,
+              },
+              activeProfileId,
+              activeProfile.household_id,
+            );
+          }
+          router.back();
+        },
       },
     );
   }

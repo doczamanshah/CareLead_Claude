@@ -40,6 +40,10 @@ export default function CaregiversLayout() {
         name="[grantId]"
         options={{ title: 'Caregiver Details', animation: 'slide_from_right' }}
       />
+      <Stack.Screen
+        name="contribute"
+        options={{ headerShown: false, animation: 'slide_from_right' }}
+      />
     </Stack>
   );
 }

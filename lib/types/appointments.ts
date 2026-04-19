@@ -262,6 +262,41 @@ export interface Outcome {
   created_at: string;
 }
 
+// ── Pre-Appointment Profile Accuracy Check ────────────────────────────────
+
+export type PreAppointmentCheckStatus =
+  | 'good'
+  | 'stale'
+  | 'missing'
+  | 'action_needed';
+
+export type PreAppointmentCheckCategory =
+  | 'medications'
+  | 'allergies'
+  | 'conditions'
+  | 'insurance'
+  | 'care_team'
+  | 'questions'
+  | 'documents';
+
+export interface PreAppointmentCheckItem {
+  id: string;
+  category: PreAppointmentCheckCategory;
+  title: string;
+  detail: string;
+  status: PreAppointmentCheckStatus;
+  actionLabel?: string;
+  actionRoute?: string;
+  actionParams?: Record<string, string>;
+}
+
+export interface PreAppointmentCheckResult {
+  isReady: boolean;
+  items: PreAppointmentCheckItem[];
+  completedCount: number;
+  totalCount: number;
+}
+
 export const APPOINTMENT_TYPE_LABELS: Record<AppointmentType, string> = {
   doctor: 'Doctor Visit',
   labs: 'Labs',

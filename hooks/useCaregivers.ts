@@ -19,6 +19,10 @@ import {
 } from '@/services/caregivers';
 import type { PermissionTemplateId, PermissionScope } from '@/lib/constants/permissionTemplates';
 import type { CreateInviteParams } from '@/lib/types/caregivers';
+import { supabase } from '@/lib/supabase';
+import { useLifeEventStore } from '@/stores/lifeEventStore';
+import { detectLifeEventTriggers } from '@/services/lifeEventTriggers';
+import type { ProfileFact } from '@/lib/types/profile';
 
 // ── Queries ──────────────────────────────────────────────────────────
 
@@ -121,8 +125,41 @@ export function useCreateInvite() {
       if (!result.success) throw new Error(result.error);
       return result.data;
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: ['caregivers', 'invites', data.household_id] });
+
+      // Fire "caregiver_added" life-event for each profile the invite shares —
+      // best effort. A single prompt per profile on the inviter's Home.
+      try {
+        const caregiverName =
+          data.invited_name?.trim() ||
+          data.invited_email?.trim() ||
+          data.invited_phone?.trim() ||
+          'your caregiver';
+        for (const sharedProfileId of data.profile_ids) {
+          const { data: factsData } = await supabase
+            .from('profile_facts')
+            .select('*')
+            .eq('profile_id', sharedProfileId)
+            .is('deleted_at', null);
+          const facts = (factsData ?? []) as ProfileFact[];
+          const prompts = detectLifeEventTriggers({
+            eventType: 'caregiver_added',
+            eventData: {
+              caregiverName,
+              inviteId: data.id,
+            },
+            profileId: sharedProfileId,
+            householdId: data.household_id,
+            existingProfileFacts: facts,
+          });
+          if (prompts.length > 0) {
+            useLifeEventStore.getState().addPrompts(prompts);
+          }
+        }
+      } catch {
+        // silent
+      }
     },
   });
 }

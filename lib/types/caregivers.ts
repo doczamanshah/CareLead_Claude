@@ -101,3 +101,28 @@ export interface InviteLookup {
 export interface PendingInviteForUser extends Omit<InviteLookup, 'status'> {
   token: string;
 }
+
+// ── Caregiver Enrichment ─────────────────────────────────────────────
+
+export type CaregiverEnrichmentKind =
+  | 'add_medications'
+  | 'add_allergies'
+  | 'add_insurance'
+  | 'link_conditions_to_meds'
+  | 'capture_recent_visit'
+  | 'refresh_medications';
+
+export type CaregiverEnrichmentPriority = 'high' | 'medium' | 'low';
+
+export interface CaregiverEnrichmentPrompt {
+  id: string;
+  kind: CaregiverEnrichmentKind;
+  profileId: string;
+  patientName: string;
+  title: string;
+  detail: string;
+  actionLabel: string;
+  actionRoute: string;
+  actionParams?: Record<string, string>;
+  priority: CaregiverEnrichmentPriority;
+}

@@ -64,6 +64,47 @@ export interface HouseholdMember {
   updated_at: string;
 }
 
+// ── Quarterly Profile Review ──────────────────────────────────────────────
+
+export type ReviewFrequency = 'quarterly' | 'biannual' | 'never';
+
+export type ProfileReviewSourceType =
+  | 'profile_fact'
+  | 'medication';
+
+export type ProfileReviewCategory =
+  | 'medications'
+  | 'conditions'
+  | 'allergies'
+  | 'care_team'
+  | 'insurance'
+  | 'emergency_contact';
+
+export interface ProfileReviewItem {
+  id: string;
+  label: string;
+  detail: string;
+  lastUpdated: string;
+  isStale: boolean;
+  sourceType: ProfileReviewSourceType;
+  sourceId: string;
+}
+
+export interface ProfileReviewSection {
+  category: ProfileReviewCategory;
+  title: string;
+  icon: string;
+  items: ProfileReviewItem[];
+  isEmpty: boolean;
+}
+
+export interface ProfileReviewResult {
+  sections: ProfileReviewSection[];
+  totalItems: number;
+  staleItems: number;
+  lastReviewedAt: string | null;
+}
+
 export const PROFILE_FACT_CATEGORIES: {
   key: ProfileFactCategory;
   label: string;

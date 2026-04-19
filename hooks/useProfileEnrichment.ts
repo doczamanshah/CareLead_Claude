@@ -24,6 +24,12 @@ import type {
   ProfileEnrichmentSuggestion,
 } from '@/lib/types/enrichment';
 
+// Stable empty-array reference for the suggestions selector. Defined at module
+// scope so every render returns the same array when a source has no entries —
+// inline `?? []` would create a new array each call and trigger infinite
+// re-renders via Zustand's Object.is equality check.
+const EMPTY_SUGGESTIONS: ProfileEnrichmentSuggestion[] = [];
+
 interface UseProfileEnrichmentParams {
   profileId: string | null | undefined;
   householdId: string | null | undefined;
@@ -61,7 +67,7 @@ export function useProfileEnrichment(params: UseProfileEnrichmentParams) {
   const dismissAllForSource = useEnrichmentStore((s) => s.dismissAllForSource);
   const acceptSuggestionInStore = useEnrichmentStore((s) => s.acceptSuggestion);
   const suggestions = useEnrichmentStore((s) =>
-    sourceId ? s.suggestions[sourceId] ?? [] : [],
+    sourceId ? s.suggestions[sourceId] ?? EMPTY_SUGGESTIONS : EMPTY_SUGGESTIONS,
   );
 
   // Re-detect when extraction or facts change. Detection is pure — no I/O —

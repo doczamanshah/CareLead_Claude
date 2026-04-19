@@ -6,11 +6,14 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  Share,
   StyleSheet,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { useProfileGaps, useFillProfileGap, useFillGeneralGap } from '@/hooks/useProfileGaps';
+import { useAccessGrants } from '@/hooks/useCaregivers';
 import { inferMedicationDefaults, FREQUENCY_OPTIONS } from '@/lib/utils/medicalInference';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
@@ -48,8 +51,14 @@ export default function StrengthenProfileScreen() {
   const { profileId } = useLocalSearchParams<{ profileId: string }>();
   const router = useRouter();
   const { data: gaps, isLoading, error } = useProfileGaps(profileId);
+  const { data: accessGrants } = useAccessGrants(profileId ?? null);
   const fillGap = useFillProfileGap();
   const fillGeneral = useFillGeneralGap();
+
+  const activeCaregiver = useMemo(() => {
+    const list = accessGrants ?? [];
+    return list.find((g) => g.status === 'active') ?? null;
+  }, [accessGrants]);
 
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [completedGaps, setCompletedGaps] = useState<Set<string>>(new Set());
@@ -134,6 +143,27 @@ export default function StrengthenProfileScreen() {
     setCompletedGaps((prev) => new Set(prev).add(gapId));
   }, []);
 
+  const handleAskCaregiver = useCallback(async () => {
+    if (!activeCaregiver) return;
+    const caregiverName =
+      activeCaregiver.grantee_display_name?.trim() || 'there';
+    const gapSummary = (gaps ?? [])
+      .filter((g) => !completedGaps.has(g.id))
+      .slice(0, 5)
+      .map((g) => `• ${g.prompt_text}`)
+      .join('\n');
+    const message =
+      `Hey ${caregiverName}, can you help update my health profile on CareLead? ` +
+      (gapSummary
+        ? `Here are some things that need adding:\n${gapSummary}`
+        : 'A few things still need filling in.');
+    try {
+      await Share.share({ message });
+    } catch {
+      // user cancelled
+    }
+  }, [activeCaregiver, gaps, completedGaps]);
+
   if (isLoading) return <ScreenLayout loading />;
   if (error) return <ScreenLayout error={error as Error} />;
 
@@ -175,6 +205,35 @@ export default function StrengthenProfileScreen() {
           </Text>
         )}
       </View>
+
+      {activeCaregiver && (
+        <TouchableOpacity
+          style={styles.askCaregiverCard}
+          activeOpacity={0.7}
+          onPress={handleAskCaregiver}
+        >
+          <View style={styles.askCaregiverIconWrap}>
+            <Ionicons
+              name="people-outline"
+              size={20}
+              color={COLORS.primary.DEFAULT}
+            />
+          </View>
+          <View style={styles.askCaregiverBody}>
+            <Text style={styles.askCaregiverTitle}>
+              Ask {activeCaregiver.grantee_display_name?.trim() || 'your caregiver'} to help?
+            </Text>
+            <Text style={styles.askCaregiverDetail}>
+              They can add medications and documents for you.
+            </Text>
+          </View>
+          <Ionicons
+            name="share-outline"
+            size={18}
+            color={COLORS.primary.DEFAULT}
+          />
+        </TouchableOpacity>
+      )}
 
       {/* Gap cards grouped by category */}
       {Object.entries(grouped).map(([cat, catGaps]) => (
@@ -321,6 +380,40 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.xs,
     color: COLORS.text.secondary,
     marginTop: 2,
+  },
+
+  askCaregiverCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    marginBottom: 20,
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '20',
+  },
+  askCaregiverIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  askCaregiverBody: {
+    flex: 1,
+  },
+  askCaregiverTitle: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  askCaregiverDetail: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    marginTop: 2,
+    lineHeight: 17,
   },
 
   categorySection: {

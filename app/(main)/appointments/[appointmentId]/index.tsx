@@ -22,6 +22,8 @@ import {
   useCloseoutForAppointment,
   useGenerateVisitSummary,
 } from '@/hooks/useCloseout';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePreAppointmentCheck } from '@/hooks/usePreAppointmentCheck';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import {
@@ -71,11 +73,19 @@ function formatFullDateTime(iso: string): string {
 export default function AppointmentDetailScreen() {
   const router = useRouter();
   const { appointmentId } = useLocalSearchParams<{ appointmentId: string }>();
+  const { activeProfile } = useActiveProfile();
   const { data: appointment, isLoading, error } = useAppointmentDetail(
     appointmentId ?? null,
   );
   const generatePacket = useGenerateVisitPacket();
   const { data: closeout } = useCloseoutForAppointment(appointmentId ?? null);
+  const { data: preCheck } = usePreAppointmentCheck(
+    appointment?.profile_id ?? null,
+    activeProfile?.household_id ?? null,
+    appointmentId ?? null,
+    appointment?.start_time ?? null,
+    appointment?.provider_name ?? null,
+  );
   const generateSummary = useGenerateVisitSummary();
   const [summaryText, setSummaryText] = useState<string | null>(null);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
@@ -270,6 +280,54 @@ export default function AppointmentDetailScreen() {
             </View>
           </Card>
         )}
+
+        {/* Pre-Visit Checklist — only for upcoming appointments */}
+        {preCheck &&
+          appointment.status !== 'cancelled' &&
+          appointment.status !== 'rescheduled' &&
+          appointment.status !== 'completed' &&
+          new Date(appointment.start_time).getTime() > Date.now() && (
+            <>
+              <Text style={styles.sectionLabel}>Pre-Visit Checklist</Text>
+              <Card style={styles.prepCard}>
+                <TouchableOpacity
+                  onPress={() =>
+                    router.push(
+                      `/(main)/appointments/${appointmentId}/pre-check`,
+                    )
+                  }
+                  activeOpacity={0.7}
+                >
+                  {preCheck.isReady ? (
+                    <View style={styles.preCheckReadyRow}>
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={22}
+                        color={COLORS.success.DEFAULT}
+                      />
+                      <Text style={styles.preCheckReadyText}>
+                        You're all set for this visit!
+                      </Text>
+                    </View>
+                  ) : (
+                    <>
+                      <Text style={styles.prepCardTitle}>
+                        Profile readiness: {preCheck.completedCount} of{' '}
+                        {preCheck.totalCount}
+                      </Text>
+                      <Text style={styles.prepCardBody}>
+                        A quick check so your visit goes smoothly — tap to
+                        review what's still needed.
+                      </Text>
+                      <Text style={styles.prepCardLink}>
+                        Review checklist {'\u203A'}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </Card>
+            </>
+          )}
 
         {/* Visit Prep card */}
         <Text style={styles.sectionLabel}>Visit Prep</Text>
@@ -631,5 +689,16 @@ const styles = StyleSheet.create({
     color: COLORS.text.DEFAULT,
     marginTop: 10,
     lineHeight: 20,
+  },
+  preCheckReadyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  preCheckReadyText: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.success.DEFAULT,
+    flex: 1,
   },
 });

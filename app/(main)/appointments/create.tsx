@@ -15,6 +15,7 @@ import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useCreateAppointment } from '@/hooks/useAppointments';
+import { useDispatchLifeEventTriggers } from '@/hooks/useLifeEventTriggers';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import {
@@ -53,7 +54,8 @@ function buildDateTime(dayOffset: number, hour: number, minute: number): string 
 
 export default function CreateAppointmentScreen() {
   const router = useRouter();
-  const { activeProfileId } = useActiveProfile();
+  const { activeProfileId, activeProfile } = useActiveProfile();
+  const dispatchLifeEvent = useDispatchLifeEventTriggers();
   const createAppointment = useCreateAppointment();
 
   // After successful creation we show a brief "what's next?" screen rather
@@ -133,6 +135,18 @@ export default function CreateAppointmentScreen() {
             title: appointment.title,
             provider_name: appointment.provider_name,
           });
+          if (activeProfile?.household_id) {
+            void dispatchLifeEvent(
+              'appointment_created',
+              {
+                appointmentId: appointment.id,
+                providerName: appointment.provider_name,
+                facilityName: appointment.facility_name,
+              },
+              activeProfileId,
+              activeProfile.household_id,
+            );
+          }
         },
       },
     );

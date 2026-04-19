@@ -27,10 +27,16 @@ import {
 import { useResults, useResultsBriefing } from '@/hooks/useResults';
 import { usePreventiveItems, usePreventiveBriefing } from '@/hooks/usePreventive';
 import { usePostVisitBriefing } from '@/hooks/usePostVisitCapture';
+import { usePreAppointmentBriefing } from '@/hooks/usePreAppointmentCheck';
+import {
+  useDismissReviewBriefing,
+  useProfileReviewDue,
+} from '@/hooks/useProfileReview';
 import type { BillingBriefingItem } from '@/services/billingBriefing';
 import type { ResultsBriefingItem } from '@/services/resultsBriefing';
 import type { PreventiveBriefingItem } from '@/services/preventiveBriefing';
 import type { PostVisitBriefingItem } from '@/services/postVisitBriefing';
+import type { PreAppointmentBriefingItem } from '@/services/preAppointmentCheck';
 import { needsMedicationMigration, migrateMedicationFacts } from '@/services/medicationMigration';
 import {
   enableBiometricForUser,
@@ -44,6 +50,17 @@ import {
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { Task } from '@/lib/types/tasks';
+import { LifeEventPromptCard } from '@/components/LifeEventPromptCard';
+import { useLifeEventStore } from '@/stores/lifeEventStore';
+import { useAddProfileFact, useDeleteProfileFact } from '@/hooks/useProfileDetail';
+import type { LifeEventPrompt } from '@/lib/types/lifeEvents';
+import {
+  useCaregiverEnrichmentPrompts,
+  useCaregiverOnboarded,
+  useDismissCaregiverPrompt,
+  useIsCaregiverForProfile,
+} from '@/hooks/useCaregiverEnrichment';
+import type { CaregiverEnrichmentPrompt } from '@/lib/types/caregivers';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -118,6 +135,48 @@ export default function HomeScreen() {
   const { data: preventiveItems } = usePreventiveItems(activeProfileId);
   const { data: preventiveBriefing } = usePreventiveBriefing(activeProfileId, 2);
   const { data: postVisitBriefing } = usePostVisitBriefing(activeProfileId, 3);
+  const { data: preAppointmentBriefing } = usePreAppointmentBriefing(
+    activeProfileId,
+    activeProfile?.household_id ?? null,
+    2,
+  );
+  const { data: profileReviewDue } = useProfileReviewDue(activeProfileId);
+  const dismissReviewBriefing = useDismissReviewBriefing();
+
+  // Caregiver enrichment — only fires if current user is a caregiver (not owner)
+  const { data: isCaregiver } = useIsCaregiverForProfile(activeProfileId);
+  const { data: caregiverOnboarded } = useCaregiverOnboarded(activeProfileId);
+  const { data: caregiverPrompts } = useCaregiverEnrichmentPrompts(
+    isCaregiver ? activeProfileId : null,
+    activeProfile?.household_id ?? null,
+    2,
+  );
+  const dismissCaregiverPrompt = useDismissCaregiverPrompt();
+
+  // First-time caregiver → contribute screen. One-shot per user+profile.
+  const caregiverRedirectRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isCaregiver || !activeProfileId) return;
+    if (caregiverOnboarded !== false) return;
+    if (caregiverRedirectRef.current === activeProfileId) return;
+    caregiverRedirectRef.current = activeProfileId;
+    router.push({
+      pathname: '/(main)/caregivers/contribute',
+      params: { profileId: activeProfileId },
+    } as never);
+  }, [isCaregiver, caregiverOnboarded, activeProfileId, router]);
+
+  // Life-event prompts — top queued prompt for the active profile
+  const lifeEventPrompts = useLifeEventStore((s) => s.pendingPrompts);
+  const dismissLifeEventPrompt = useLifeEventStore((s) => s.dismissPrompt);
+  const topLifeEventPrompt = useMemo<LifeEventPrompt | null>(() => {
+    if (!activeProfileId) return null;
+    return (
+      lifeEventPrompts.find((p) => p.profileId === activeProfileId) ?? null
+    );
+  }, [lifeEventPrompts, activeProfileId]);
+  const addProfileFactMutation = useAddProfileFact(activeProfileId ?? '');
+  const deleteProfileFactMutation = useDeleteProfileFact(activeProfileId ?? '');
 
   // One-time biometric enrollment prompt per user on this device
   const biometricPromptRef = useRef<string | null>(null);
@@ -260,6 +319,11 @@ export default function HomeScreen() {
     const resultsItems: ResultsBriefingItem[] = resultsBriefing ?? [];
     const preventiveItems: PreventiveBriefingItem[] = preventiveBriefing ?? [];
     const postVisitItems: PostVisitBriefingItem[] = postVisitBriefing ?? [];
+    const preAppointmentItems: PreAppointmentBriefingItem[] =
+      preAppointmentBriefing ?? [];
+    const caregiverEnrichmentItems: CaregiverEnrichmentPrompt[] =
+      caregiverPrompts ?? [];
+    const showProfileReview = !!profileReviewDue;
 
     const nothingDue =
       !hasMeds &&
@@ -270,7 +334,10 @@ export default function HomeScreen() {
       billingItems.length === 0 &&
       resultsItems.length === 0 &&
       preventiveItems.length === 0 &&
-      postVisitItems.length === 0;
+      postVisitItems.length === 0 &&
+      preAppointmentItems.length === 0 &&
+      caregiverEnrichmentItems.length === 0 &&
+      !showProfileReview;
 
     const briefingLineCount =
       (hasMeds ? 1 : 0) +
@@ -280,7 +347,10 @@ export default function HomeScreen() {
       billingItems.length +
       resultsItems.length +
       preventiveItems.length +
-      postVisitItems.length;
+      postVisitItems.length +
+      preAppointmentItems.length +
+      caregiverEnrichmentItems.length +
+      (showProfileReview ? 1 : 0);
 
     return {
       hasMeds,
@@ -294,10 +364,13 @@ export default function HomeScreen() {
       resultsItems,
       preventiveItems,
       postVisitItems,
+      preAppointmentItems,
+      caregiverEnrichmentItems,
+      showProfileReview,
       nothingDue,
       briefingLineCount,
     };
-  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing, preventiveBriefing, postVisitBriefing]);
+  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing, preventiveBriefing, postVisitBriefing, preAppointmentBriefing, profileReviewDue, caregiverPrompts]);
 
   // Module stats
   const moduleStats = useMemo(() => {
@@ -351,6 +424,47 @@ export default function HomeScreen() {
     [results],
   );
 
+  const handleLifeEventAction = (
+    handlerId: string,
+    payload: Record<string, unknown> | undefined,
+    prompt: LifeEventPrompt,
+  ) => {
+    if (handlerId === 'add_condition') {
+      const conditionName =
+        typeof payload?.conditionName === 'string'
+          ? (payload.conditionName as string)
+          : null;
+      if (!conditionName || !activeProfileId) return;
+      addProfileFactMutation.mutate({
+        category: 'condition',
+        field_key: 'condition.name',
+        value_json: { name: conditionName, status: 'active' },
+      });
+      return;
+    }
+    if (handlerId === 'archive_condition') {
+      const factId = typeof payload?.factId === 'string' ? (payload.factId as string) : null;
+      if (!factId) return;
+      deleteProfileFactMutation.mutate(factId);
+      return;
+    }
+    if (handlerId === 'add_care_team_from_appointment') {
+      const providerName =
+        typeof payload?.providerName === 'string'
+          ? (payload.providerName as string)
+          : null;
+      if (!providerName || !activeProfileId) return;
+      addProfileFactMutation.mutate({
+        category: 'care_team',
+        field_key: 'care_team.name',
+        value_json: { name: providerName },
+      });
+      return;
+    }
+    // Unknown handler → just close, prompt logs will surface it if it matters.
+    dismissLifeEventPrompt(prompt.id);
+  };
+
   const todayDateStr = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
     month: 'long',
@@ -387,6 +501,15 @@ export default function HomeScreen() {
             <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.8)" />
           </TouchableOpacity>
           <Text style={styles.tagline}>Your care. In your hands.</Text>
+
+          {isCaregiver && activeProfile && (
+            <View style={styles.caregiverBadge}>
+              <Ionicons name="heart" size={13} color="#FFFFFF" />
+              <Text style={styles.caregiverBadgeText}>
+                You're helping manage {activeProfile.display_name}'s profile
+              </Text>
+            </View>
+          )}
 
           {/* Profile Switcher Avatars — inside gradient */}
           {profiles.length > 1 && (
@@ -425,6 +548,17 @@ export default function HomeScreen() {
         </LinearGradient>
 
         <View style={styles.body}>
+          {/* Life-event prompt — surfaces contextually after a profile change */}
+          {topLifeEventPrompt && (
+            <View style={styles.lifeEventPromptWrap}>
+              <LifeEventPromptCard
+                prompt={topLifeEventPrompt}
+                onDismiss={dismissLifeEventPrompt}
+                onHandler={handleLifeEventAction}
+              />
+            </View>
+          )}
+
           {/* ZONE 2: TODAY'S BRIEFING CARD */}
           <View style={styles.zone}>
             <TouchableOpacity
@@ -486,6 +620,39 @@ export default function HomeScreen() {
                           }}
                         >
                           <Ionicons name="sparkles" size={18} color={tintColor} />
+                          <Text
+                            style={[styles.briefingLineText, { color: tintColor }]}
+                            numberOfLines={2}
+                          >
+                            {item.message}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                    {briefing.preAppointmentItems.map((item) => {
+                      const tintColor =
+                        item.color === 'critical'
+                          ? COLORS.error.DEFAULT
+                          : item.color === 'warning'
+                          ? COLORS.accent.dark
+                          : COLORS.primary.DEFAULT;
+                      return (
+                        <TouchableOpacity
+                          key={item.key}
+                          style={styles.briefingLine}
+                          activeOpacity={0.7}
+                          onPress={(e) => {
+                            e.stopPropagation?.();
+                            router.push(
+                              `/(main)/appointments/${item.appointmentId}/pre-check`,
+                            );
+                          }}
+                        >
+                          <Ionicons
+                            name={item.icon as keyof typeof Ionicons.glyphMap}
+                            size={18}
+                            color={tintColor}
+                          />
                           <Text
                             style={[styles.briefingLineText, { color: tintColor }]}
                             numberOfLines={2}
@@ -650,6 +817,77 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                       );
                     })}
+                    {briefing.caregiverEnrichmentItems.map((item) => {
+                      const iconColor =
+                        item.priority === 'high'
+                          ? COLORS.primary.DEFAULT
+                          : COLORS.text.secondary;
+                      return (
+                        <TouchableOpacity
+                          key={item.id}
+                          style={styles.briefingLine}
+                          activeOpacity={0.7}
+                          onPress={(e) => {
+                            e.stopPropagation?.();
+                            const params = item.actionParams;
+                            if (params) {
+                              router.push({
+                                pathname: item.actionRoute,
+                                params,
+                              } as never);
+                            } else {
+                              router.push(item.actionRoute as never);
+                            }
+                          }}
+                          onLongPress={() => {
+                            dismissCaregiverPrompt.mutate({
+                              kind: item.kind,
+                              profileId: item.profileId,
+                            });
+                          }}
+                        >
+                          <Ionicons
+                            name="heart-outline"
+                            size={18}
+                            color={iconColor}
+                          />
+                          <Text
+                            style={styles.briefingLineText}
+                            numberOfLines={2}
+                          >
+                            {item.title}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                    {briefing.showProfileReview && (
+                      <TouchableOpacity
+                        style={styles.briefingLine}
+                        activeOpacity={0.7}
+                        onPress={(e) => {
+                          e.stopPropagation?.();
+                          if (activeProfileId) {
+                            dismissReviewBriefing.mutate(activeProfileId);
+                          }
+                          router.push('/(main)/profile/review');
+                        }}
+                      >
+                        <Ionicons
+                          name="refresh-circle-outline"
+                          size={18}
+                          color={COLORS.text.secondary}
+                        />
+                        <Text
+                          style={[
+                            styles.briefingLineText,
+                            { color: COLORS.text.secondary },
+                          ]}
+                          numberOfLines={2}
+                        >
+                          Time for a quick profile check-in. Keep your health info accurate.
+                        </Text>
+                      </TouchableOpacity>
+                    )}
                     {briefing.briefingLineCount < 3 && (
                       <TouchableOpacity
                         style={styles.briefingAskPrompt}
@@ -825,6 +1063,21 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     letterSpacing: 0.5,
   },
+  caregiverBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 12,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+  },
+  caregiverBadgeText: {
+    fontSize: 12,
+    color: '#FFFFFF',
+    fontWeight: FONT_WEIGHTS.medium,
+  },
 
   // Profile switcher (inside gradient)
   profileSwitcher: {
@@ -956,6 +1209,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.medium,
+  },
+  lifeEventPromptWrap: {
+    marginBottom: 16,
   },
   briefingFooter: {
     flexDirection: 'row',

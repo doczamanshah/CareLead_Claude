@@ -12,6 +12,7 @@ export default function ProfileLayout() {
       }}
     >
       <Stack.Screen name="[profileId]" options={{ headerShown: false }} />
+      <Stack.Screen name="review" options={{ headerShown: false }} />
     </Stack>
   );
 }

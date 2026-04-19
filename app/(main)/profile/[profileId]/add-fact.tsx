@@ -6,6 +6,8 @@ import { Input } from '@/components/ui/Input';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
 import { useAddProfileFact } from '@/hooks/useProfileDetail';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { useDispatchLifeEventTriggers } from '@/hooks/useLifeEventTriggers';
 import { PROFILE_FACT_CATEGORIES } from '@/lib/types/profile';
 import type { ProfileFactCategory } from '@/lib/types/profile';
 import { COLORS } from '@/lib/constants/colors';
@@ -92,6 +94,8 @@ export default function AddFactScreen() {
   }>();
   const router = useRouter();
   const addMutation = useAddProfileFact(profileId!);
+  const { activeProfile } = useActiveProfile();
+  const dispatchLifeEvent = useDispatchLifeEventTriggers();
 
   const categoryKey = (category ?? 'condition') as ProfileFactCategory;
   const categoryMeta = PROFILE_FACT_CATEGORIES.find((c) => c.key === categoryKey);
@@ -141,7 +145,58 @@ export default function AddFactScreen() {
         value_json: valueJson,
       },
       {
-        onSuccess: () => {
+        onSuccess: (fact) => {
+          const householdId = activeProfile?.household_id;
+          if (householdId && profileId) {
+            if (categoryKey === 'insurance') {
+              void dispatchLifeEvent(
+                'insurance_added',
+                {
+                  factId: fact.id,
+                  payerName:
+                    typeof valueJson.payer_name === 'string'
+                      ? valueJson.payer_name
+                      : typeof valueJson.provider === 'string'
+                        ? (valueJson.provider as string)
+                        : null,
+                },
+                profileId,
+                householdId,
+              );
+            } else if (categoryKey === 'care_team') {
+              void dispatchLifeEvent(
+                'provider_added',
+                {
+                  providerName:
+                    typeof valueJson.name === 'string'
+                      ? (valueJson.name as string)
+                      : 'your provider',
+                  specialty:
+                    typeof valueJson.specialty === 'string'
+                      ? (valueJson.specialty as string)
+                      : null,
+                  factId: fact.id,
+                },
+                profileId,
+                householdId,
+              );
+            } else if (categoryKey === 'condition') {
+              void dispatchLifeEvent(
+                'condition_added',
+                {
+                  conditionName:
+                    typeof valueJson.name === 'string'
+                      ? (valueJson.name as string)
+                      : typeof valueJson.condition === 'string'
+                        ? (valueJson.condition as string)
+                        : 'this condition',
+                  factId: fact.id,
+                },
+                profileId,
+                householdId,
+              );
+            }
+          }
           router.back();
         },
         onError: (err) => {

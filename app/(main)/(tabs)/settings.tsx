@@ -17,7 +17,14 @@ import { Card } from '@/components/ui/Card';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import { useCareGuidanceLevel, useWeeklyDigest } from '@/hooks/usePreferences';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
+import {
+  useLastReviewedAt,
+  useReviewFrequency,
+  useSetReviewFrequency,
+} from '@/hooks/useProfileReview';
 import { useAuthStore } from '@/stores/authStore';
+import type { ReviewFrequency } from '@/lib/types/profile';
 import {
   autoLockLabel,
   clearPin,
@@ -76,12 +83,33 @@ const SESSION_DURATION_OPTIONS: { key: SessionDuration; label: string }[] = [
   { key: '30d', label: '30 days' },
 ];
 
+const REVIEW_FREQUENCY_OPTIONS: { key: ReviewFrequency; label: string }[] = [
+  { key: 'quarterly', label: 'Every 3 months' },
+  { key: 'biannual', label: 'Every 6 months' },
+  { key: 'never', label: 'Never' },
+];
+
+function formatLastReviewed(iso: string | null | undefined): string {
+  if (!iso) return 'Never reviewed';
+  const date = new Date(iso);
+  return `Last reviewed ${date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })}`;
+}
+
 export default function SettingsScreen() {
   const { level, setLevel, isUpdating } = useCareGuidanceLevel();
   const { enabled: weeklyDigestEnabled, setEnabled: setWeeklyDigest } = useWeeklyDigest();
   const user = useAuthStore((s) => s.user);
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { activeProfileId } = useActiveProfile();
+  const { data: lastReviewedAt } = useLastReviewedAt(activeProfileId);
+  const { data: reviewFrequency } = useReviewFrequency();
+  const setFrequencyMutation = useSetReviewFrequency();
+  const [showReviewFrequencyOptions, setShowReviewFrequencyOptions] = useState(false);
 
   const [capability, setCapability] = useState<BiometricCapability | null>(null);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
@@ -427,6 +455,91 @@ export default function SettingsScreen() {
                       selected && styles.autoLockOptionSelected,
                     ]}
                     onPress={() => handlePickSessionDuration(opt.key)}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.autoLockOptionText,
+                        selected && styles.autoLockOptionTextSelected,
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                    {selected ? (
+                      <Ionicons
+                        name="checkmark"
+                        size={18}
+                        color={COLORS.primary.DEFAULT}
+                      />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
+        </View>
+      </View>
+
+      {/* Health Profile Section */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Health Profile</Text>
+        <Text style={styles.sectionDescription}>
+          A periodic check-in to keep your saved health info accurate.
+        </Text>
+        <TouchableOpacity
+          style={styles.autoLockRow}
+          activeOpacity={0.7}
+          onPress={() => router.push('/(main)/profile/review')}
+        >
+          <View style={styles.autoLockContent}>
+            <Text style={styles.autoLockLabel}>Profile Review</Text>
+            <Text style={styles.autoLockValue}>
+              {formatLastReviewed(lastReviewedAt)}
+            </Text>
+          </View>
+          <Ionicons
+            name="chevron-forward"
+            size={18}
+            color={COLORS.text.tertiary}
+          />
+        </TouchableOpacity>
+
+        <View style={styles.pinWrap}>
+          <TouchableOpacity
+            style={styles.autoLockRow}
+            activeOpacity={0.7}
+            onPress={() => setShowReviewFrequencyOptions((v) => !v)}
+          >
+            <View style={styles.autoLockContent}>
+              <Text style={styles.autoLockLabel}>Review Frequency</Text>
+              <Text style={styles.autoLockValue}>
+                {REVIEW_FREQUENCY_OPTIONS.find(
+                  (o) => o.key === reviewFrequency,
+                )?.label ?? 'Every 3 months'}
+              </Text>
+            </View>
+            <Ionicons
+              name={showReviewFrequencyOptions ? 'chevron-up' : 'chevron-down'}
+              size={20}
+              color={COLORS.text.tertiary}
+            />
+          </TouchableOpacity>
+
+          {showReviewFrequencyOptions ? (
+            <View style={styles.autoLockOptions}>
+              {REVIEW_FREQUENCY_OPTIONS.map((opt) => {
+                const selected = reviewFrequency === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[
+                      styles.autoLockOption,
+                      selected && styles.autoLockOptionSelected,
+                    ]}
+                    onPress={() => {
+                      setFrequencyMutation.mutate(opt.key);
+                      setShowReviewFrequencyOptions(false);
+                    }}
                     activeOpacity={0.7}
                   >
                     <Text

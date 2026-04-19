@@ -16,6 +16,10 @@ import {
   type SkipReason,
 } from '@/services/medicationRefillCheck';
 import type { MedicationFrequency } from '@/lib/types/medications';
+import { supabase } from '@/lib/supabase';
+import { useLifeEventStore } from '@/stores/lifeEventStore';
+import { detectLifeEventTriggers } from '@/services/lifeEventTriggers';
+import type { ProfileFact } from '@/lib/types/profile';
 
 /** Re-export the cooldown predicate so screens can decide whether to show the sheet. */
 export { shouldPromptChangeCheck };
@@ -101,11 +105,44 @@ export function useStopMedication() {
       if (!result.success) throw new Error(result.error);
       return result.data;
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries({
         queryKey: ['medications', 'detail', data.id],
       });
       invalidateMedQueries(queryClient, data.profile_id);
+
+      // Dispatch "medication_stopped" life-event prompts. Fire-and-forget.
+      try {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('household_id')
+          .eq('id', data.profile_id)
+          .maybeSingle();
+        if (!profile?.household_id) return;
+
+        const { data: factsData } = await supabase
+          .from('profile_facts')
+          .select('*')
+          .eq('profile_id', data.profile_id)
+          .is('deleted_at', null);
+        const facts = (factsData ?? []) as ProfileFact[];
+
+        const prompts = detectLifeEventTriggers({
+          eventType: 'medication_stopped',
+          eventData: {
+            medicationId: data.id,
+            drugName: data.drug_name,
+          },
+          profileId: data.profile_id,
+          householdId: profile.household_id,
+          existingProfileFacts: facts,
+        });
+        if (prompts.length > 0) {
+          useLifeEventStore.getState().addPrompts(prompts);
+        }
+      } catch {
+        // silent
+      }
     },
   });
 }
