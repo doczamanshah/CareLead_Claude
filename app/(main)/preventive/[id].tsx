@@ -27,6 +27,7 @@ import {
   usePreventiveItemEvents,
   useUpdatePreventiveItem,
   useUpdateLastDoneDate,
+  useSetSelectedMethod,
   useDeferItem,
   useDeclineItem,
   useReopenItem,
@@ -52,6 +53,7 @@ import type {
   PreventiveMissingDataEntry,
   PreventiveItemEvent,
   PreventiveEventType,
+  ScreeningMethod,
 } from '@/lib/types/preventive';
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -136,6 +138,24 @@ function cadenceLine(cadenceMonths: number | null): string {
   return `Recommended every ${cadenceMonths} months`;
 }
 
+function describeMonths(months: number): string {
+  if (months === 12) return 'year';
+  if (months < 12) return `${months} months`;
+  if (months % 12 === 0) {
+    const years = months / 12;
+    return years === 1 ? 'year' : `${years} years`;
+  }
+  return `${months} months`;
+}
+
+function findMethod(
+  methods: ScreeningMethod[] | null,
+  methodId: string | null,
+): ScreeningMethod | null {
+  if (!methods || !methodId) return null;
+  return methods.find((m) => m.method_id === methodId) ?? null;
+}
+
 function lastDoneSourceLabel(source: string | null): string | null {
   switch (source) {
     case 'user_reported':
@@ -167,6 +187,7 @@ export default function PreventiveItemDetailScreen() {
 
   const updateItem = useUpdatePreventiveItem();
   const updateLastDone = useUpdateLastDoneDate();
+  const setMethod = useSetSelectedMethod();
   const deferMutation = useDeferItem();
   const declineMutation = useDeclineItem();
   const reopenMutation = useReopenItem();
@@ -630,7 +651,15 @@ export default function PreventiveItemDetailScreen() {
               />
               <View style={styles.completedBannerText}>
                 <Text style={styles.completedBannerTitle}>
-                  Completed on {formatDate(item.last_done_date)}
+                  {(() => {
+                    const method = findMethod(
+                      item.rule.screening_methods ?? null,
+                      item.selected_method,
+                    );
+                    return method
+                      ? `${method.name} — completed ${formatDate(item.last_done_date)}`
+                      : `Completed on ${formatDate(item.last_done_date)}`;
+                  })()}
                 </Text>
                 <View style={styles.completedBannerMetaRow}>
                   {item.last_done_source && (
@@ -682,7 +711,19 @@ export default function PreventiveItemDetailScreen() {
           <Card>
             <Text style={styles.ruleDescription}>{item.rule.description}</Text>
             <Text style={styles.ruleMeta}>{eligibilitySummary(item)}</Text>
-            <Text style={styles.ruleMeta}>{cadenceLine(item.rule.cadence_months)}</Text>
+            <Text style={styles.ruleMeta}>
+              {(() => {
+                const method = findMethod(
+                  item.rule.screening_methods ?? null,
+                  item.selected_method,
+                );
+                if (method) return `Recommended every ${describeMonths(method.cadence_months)}`;
+                if (item.rule.screening_methods && item.rule.screening_methods.length > 0) {
+                  return 'Multiple options — cadence depends on which one you choose.';
+                }
+                return cadenceLine(item.rule.cadence_months);
+              })()}
+            </Text>
             <View style={styles.ruleFooter}>
               <View style={styles.categoryChip}>
                 <Text style={styles.categoryChipText}>{categoryLabel}</Text>
@@ -741,6 +782,24 @@ export default function PreventiveItemDetailScreen() {
           </Card>
         </View>
 
+        {/* Zone c2: Screening method (when rule supports multiple) */}
+        {item.rule.screening_methods && item.rule.screening_methods.length > 0 && (
+          <ScreeningMethodSection
+            methods={item.rule.screening_methods}
+            selectedMethod={item.selected_method}
+            onSelect={(methodId) => {
+              if (!profileId || !householdId) return;
+              setMethod.mutate({
+                itemId: item.id,
+                methodId,
+                profileId,
+                householdId,
+              });
+            }}
+            submitting={setMethod.isPending}
+          />
+        )}
+
         {/* Zone d: Last screening */}
         <LastScreeningSection
           item={item}
@@ -758,11 +817,11 @@ export default function PreventiveItemDetailScreen() {
           submitting={updateLastDone.isPending || updateItem.isPending}
         />
 
-        {/* Zone e: Missing data prompts */}
-        {item.missing_data && item.missing_data.length > 0 && (
+        {/* Zone e: Missing data prompts (excluding selected_method, handled above) */}
+        {item.missing_data && item.missing_data.filter((e) => e.field !== 'selected_method').length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>HELP US GIVE YOU A BETTER RECOMMENDATION</Text>
-            {item.missing_data.map((entry, idx) => (
+            {item.missing_data.filter((e) => e.field !== 'selected_method').map((entry, idx) => (
               <MissingDataCard
                 key={`${entry.field}-${idx}`}
                 entry={entry}
@@ -1312,6 +1371,75 @@ function Header({
   );
 }
 
+// ── Screening Method Section ───────────────────────────────────────────────
+
+function ScreeningMethodSection({
+  methods,
+  selectedMethod,
+  onSelect,
+  submitting,
+}: {
+  methods: ScreeningMethod[];
+  selectedMethod: string | null;
+  onSelect: (methodId: string) => void;
+  submitting: boolean;
+}) {
+  const current = methods.find((m) => m.method_id === selectedMethod) ?? null;
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>
+        {current ? 'SCREENING TYPE' : 'WHICH TYPE APPLIES TO YOU?'}
+      </Text>
+      <Card>
+        <Text style={styles.methodIntroText}>
+          {current
+            ? 'You can update this if you used a different test.'
+            : 'This screening has multiple options. Pick the one you had (or plan to have) so we can set the right follow-up schedule.'}
+        </Text>
+        <View style={styles.methodList}>
+          {methods.map((m) => {
+            const isSelected = m.method_id === selectedMethod;
+            return (
+              <TouchableOpacity
+                key={m.method_id}
+                style={[styles.methodCard, isSelected && styles.methodCardSelected]}
+                onPress={() => onSelect(m.method_id)}
+                disabled={submitting}
+                activeOpacity={0.7}
+              >
+                <View style={styles.methodCardHeader}>
+                  <View style={styles.methodCardTitleRow}>
+                    <Text
+                      style={[
+                        styles.methodCardTitle,
+                        isSelected && styles.methodCardTitleSelected,
+                      ]}
+                    >
+                      {m.name}
+                    </Text>
+                    <Text style={styles.methodCardCadence}>
+                      every {describeMonths(m.cadence_months)}
+                    </Text>
+                  </View>
+                  {isSelected && (
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={20}
+                      color={COLORS.primary.DEFAULT}
+                    />
+                  )}
+                </View>
+                <Text style={styles.methodCardDescription}>{m.description}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </Card>
+    </View>
+  );
+}
+
 // ── Last Screening Section ─────────────────────────────────────────────────
 
 function LastScreeningSection({
@@ -1827,6 +1955,59 @@ const styles = StyleSheet.create({
   metaText: {
     fontSize: FONT_SIZES.sm,
     color: COLORS.text.secondary,
+  },
+
+  // Screening method
+  methodIntroText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  methodList: {
+    gap: 10,
+  },
+  methodCard: {
+    borderWidth: 1,
+    borderColor: COLORS.border.DEFAULT,
+    borderRadius: 12,
+    padding: 12,
+    backgroundColor: COLORS.surface.DEFAULT,
+  },
+  methodCardSelected: {
+    borderColor: COLORS.primary.DEFAULT,
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+  },
+  methodCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  methodCardTitleRow: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    gap: 8,
+  },
+  methodCardTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  methodCardTitleSelected: {
+    color: COLORS.primary.dark,
+  },
+  methodCardCadence: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+  },
+  methodCardDescription: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    lineHeight: 19,
+    marginTop: 6,
   },
 
   // Last screening

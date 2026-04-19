@@ -15,7 +15,10 @@ import type {
   PreventiveStatus,
   PreventiveMissingDataEntry,
   EligibilityCriteria,
+  ScreeningMethod,
+  SeasonalWindow,
 } from '@/lib/types/preventive';
+import { matchesCondition } from '@/lib/utils/conditionMatcher';
 
 export interface EligibilityProfileFacts {
   dateOfBirth: string | null;
@@ -32,6 +35,8 @@ export interface PreventiveItemUpsert {
   nextDueDate: string | null;
   rationale: string;
   missingData: PreventiveMissingDataEntry[];
+  hedisMeasureCode: string | null;
+  selectedMethod: string | null;
 }
 
 export interface EligibilityScanResult {
@@ -46,6 +51,8 @@ export interface RunEligibilityScanParams {
   profileFacts: EligibilityProfileFacts;
   rules: PreventiveRule[];
   existingItems: PreventiveItem[];
+  /** Override "now" for testing / deterministic runs. Defaults to new Date(). */
+  now?: Date;
 }
 
 const DUE_SOON_WINDOW_DAYS = 60;
@@ -127,6 +134,44 @@ function guidelineFootnote(rule: PreventiveRule): string {
 }
 
 /**
+ * Resolve which cadence applies, preferring the user's selected method when
+ * screening_methods are defined. Returns null when no cadence is known (e.g.
+ * user hasn't picked a method yet, or the rule is one-time).
+ */
+function resolveCadence(
+  rule: PreventiveRule,
+  selectedMethodId: string | null,
+): { cadence: number | null; method: ScreeningMethod | null } {
+  const methods = rule.screening_methods ?? null;
+  if (methods && methods.length > 0) {
+    const picked = selectedMethodId
+      ? methods.find((m) => m.method_id === selectedMethodId) ?? null
+      : null;
+    if (picked) return { cadence: picked.cadence_months, method: picked };
+    return { cadence: null, method: null };
+  }
+  return { cadence: rule.cadence_months, method: null };
+}
+
+function isInSeason(today: Date, window: SeasonalWindow): boolean {
+  const month = today.getMonth() + 1; // 1-12
+  const { start_month, end_month } = window;
+  if (start_month <= end_month) {
+    return month >= start_month && month <= end_month;
+  }
+  // Wraparound (e.g., Nov–Feb)
+  return month >= start_month || month <= end_month;
+}
+
+function nextSeasonStart(today: Date, window: SeasonalWindow): Date {
+  const year = today.getFullYear();
+  const candidate = new Date(year, window.start_month - 1, 1);
+  candidate.setHours(0, 0, 0, 0);
+  if (candidate.getTime() >= today.getTime()) return candidate;
+  return new Date(year + 1, window.start_month - 1, 1);
+}
+
+/**
  * Deterministically evaluate every rule against the profile and return
  * the upsert list. The caller is responsible for persisting the result.
  */
@@ -135,7 +180,7 @@ export function runEligibilityScan(
 ): EligibilityScanResult {
   const { profileFacts, rules, existingItems } = params;
 
-  const today = new Date();
+  const today = params.now ? new Date(params.now) : new Date();
   today.setHours(0, 0, 0, 0);
 
   const dob = parseDate(profileFacts.dateOfBirth);
@@ -162,11 +207,30 @@ export function runEligibilityScan(
     const criteria = rule.eligibility_criteria;
     const audience = eligibilityAudience(criteria);
     const footnote = guidelineFootnote(rule);
+    const hedis = rule.hedis_measure_code ?? null;
+    const selectedMethodId = existing?.selected_method ?? null;
 
     // ── Preserve user choices ─────────────────────────────────────────
     if (existing && (existing.status === 'deferred' || existing.status === 'declined')) {
       itemsUnchanged.push(existing.id);
       continue;
+    }
+
+    // ── Condition-triggered rules ─────────────────────────────────────
+    // When a rule has condition_triggers we test the patient's condition
+    // list. is_condition_dependent decides whether a condition match is
+    // required or merely an alternative entry point.
+    const triggers = rule.condition_triggers ?? null;
+    const conditionHit = triggers ? matchesCondition(profileFacts.conditions, triggers) : false;
+
+    if (rule.is_condition_dependent) {
+      if (!conditionHit) {
+        skippedRules.push({
+          ruleId: rule.id,
+          reason: 'Rule requires a matching condition and none is present',
+        });
+        continue;
+      }
     }
 
     // ── Missing DOB → needs_review ────────────────────────────────────
@@ -178,22 +242,33 @@ export function runEligibilityScan(
         },
       ];
       const rationale = `Recommended for ${audience}. ${footnote} To give you a personalized recommendation, we need your date of birth.`;
-      upsertNeedsReview(rule, existing, rationale, missingData, itemsToUpsert);
+      upsertNeedsReview(rule, existing, rationale, missingData, hedis, itemsToUpsert);
       continue;
     }
 
     // ── Age check ─────────────────────────────────────────────────────
-    if (criteria.min_age !== null && age < criteria.min_age) {
+    // For is_condition_dependent rules a condition match is sufficient —
+    // age bounds still apply when specified, but only as a hard cap.
+    // For non-condition-dependent rules, age/sex must match OR a
+    // condition trigger must hit.
+    const ageOk =
+      (criteria.min_age === null || age >= criteria.min_age) &&
+      (criteria.max_age === null || age <= criteria.max_age);
+
+    if (!ageOk && !rule.is_condition_dependent && !conditionHit) {
       skippedRules.push({
         ruleId: rule.id,
-        reason: `Age ${age} below min_age ${criteria.min_age}`,
+        reason: `Age ${age} outside ${criteria.min_age ?? '-'}–${criteria.max_age ?? '-'}`,
       });
       continue;
     }
-    if (criteria.max_age !== null && age > criteria.max_age) {
+
+    if (!ageOk && rule.is_condition_dependent) {
+      // Condition present but outside the rule's age bounds. Skip to
+      // avoid recommending e.g. lung cancer screening at age 45.
       skippedRules.push({
         ruleId: rule.id,
-        reason: `Age ${age} above max_age ${criteria.max_age}`,
+        reason: `Age ${age} outside condition-dependent rule bounds`,
       });
       continue;
     }
@@ -209,7 +284,7 @@ export function runEligibilityScan(
           },
         ];
         const rationale = `Recommended for ${audience}. ${footnote} We need a bit more information to confirm whether this applies to you.`;
-        upsertNeedsReview(rule, existing, rationale, missingData, itemsToUpsert);
+        upsertNeedsReview(rule, existing, rationale, missingData, hedis, itemsToUpsert);
         continue;
       }
       if (normalizedSex !== criteria.sex) {
@@ -221,16 +296,14 @@ export function runEligibilityScan(
       }
     }
 
-    // ── Conditions check ──────────────────────────────────────────────
-    // When a rule requires specific conditions (e.g., overweight/obese for
-    // diabetes screening), we surface it as needs_review with a helpful
-    // prompt rather than hard-skipping — the user may have the condition
-    // but not have recorded it yet.
-    let conditionMissing = false;
+    // ── Legacy conditions on eligibility_criteria ─────────────────────
+    // (Old rules used criteria.conditions as a soft prompt rather than
+    // the new condition_triggers. Preserve that behavior.)
+    let legacyConditionMissing = false;
     if (criteria.conditions && criteria.conditions.length > 0) {
       const hasAny = criteria.conditions.some((c) => lowerConditions.includes(c.toLowerCase()));
       if (!hasAny) {
-        conditionMissing = true;
+        legacyConditionMissing = true;
       }
     }
 
@@ -241,15 +314,45 @@ export function runEligibilityScan(
     }
 
     const missingData: PreventiveMissingDataEntry[] = [];
-    if (conditionMissing && criteria.conditions) {
+    if (legacyConditionMissing && criteria.conditions) {
       missingData.push({
         field: 'conditions',
         prompt: `This screening is recommended for people with ${criteria.conditions.join(' or ')}. Let us know if any of these apply to you.`,
       });
     }
 
+    // ── Screening method prompt ───────────────────────────────────────
+    // If the rule has multiple methods and the patient has a last_done
+    // but hasn't told us which method they did, we need that before we
+    // can compute next_due accurately.
+    const hasMethods = rule.screening_methods && rule.screening_methods.length > 0;
+    if (hasMethods && existing?.last_done_date && !selectedMethodId) {
+      const methodList = (rule.screening_methods ?? []).map((m) => m.name).join(', ');
+      missingData.push({
+        field: 'selected_method',
+        prompt: `Which type of screening did you have? (${methodList})`,
+      });
+      const rationale = `Recommended for ${audience}. ${footnote} Tell us which type of screening you had so we can set the right follow-up schedule.`;
+      upsertProposal(
+        rule,
+        existing,
+        'needs_review',
+        null,
+        null,
+        rationale,
+        missingData,
+        hedis,
+        selectedMethodId,
+        itemsToUpsert,
+        itemsUnchanged,
+      );
+      continue;
+    }
+
     // ── Compute status based on last_done_date + cadence ──────────────
     const lastDone = parseDate(existing?.last_done_date ?? null);
+    const { cadence: effectiveCadence, method } = resolveCadence(rule, selectedMethodId);
+    const cadenceLabel = method ? method.name : null;
 
     if (!lastDone) {
       missingData.unshift({
@@ -257,9 +360,14 @@ export function runEligibilityScan(
         prompt: `When did you last have a ${rule.title.toLowerCase()}? Enter the date, or mark it as "never done" to add it to your schedule.`,
       });
 
-      const rationale = conditionMissing
-        ? `Recommended for ${audience} with specific risk factors. ${footnote} No previous record found — tell us more so we can make a better recommendation.`
-        : `Recommended for ${audience}. ${footnote} No record of previous screening — add a date (or mark it as needed) to get started.`;
+      let rationale: string;
+      if (legacyConditionMissing) {
+        rationale = `Recommended for ${audience} with specific risk factors. ${footnote} No previous record found — tell us more so we can make a better recommendation.`;
+      } else if (rule.is_condition_dependent && conditionHit) {
+        rationale = `Recommended because you have a related condition on file. ${footnote} No record of previous completion — add a date (or mark it as needed) to get started.`;
+      } else {
+        rationale = `Recommended for ${audience}. ${footnote} No record of previous screening — add a date (or mark it as needed) to get started.`;
+      }
 
       upsertProposal(
         rule,
@@ -269,6 +377,8 @@ export function runEligibilityScan(
         null,
         rationale,
         missingData,
+        hedis,
+        selectedMethodId,
         itemsToUpsert,
         itemsUnchanged,
       );
@@ -276,8 +386,9 @@ export function runEligibilityScan(
     }
 
     // We have a last_done_date.
-    if (rule.cadence_months === null || rule.cadence_months <= 0) {
-      // One-time series (e.g., shingles, pneumococcal)
+    if (effectiveCadence === null || effectiveCadence <= 0) {
+      // One-time series (e.g. shingles, HPV, Hep B) or rule with methods
+      // but no method picked (handled above already).
       const rationale = `One-time recommendation for ${audience}. ${footnote} Completed on ${formatHumanDate(lastDone)}.`;
       upsertProposal(
         rule,
@@ -287,33 +398,50 @@ export function runEligibilityScan(
         null,
         rationale,
         missingData,
+        hedis,
+        selectedMethodId,
         itemsToUpsert,
         itemsUnchanged,
       );
       continue;
     }
 
-    const nextDue = addMonths(lastDone, rule.cadence_months);
+    const nextDue = addMonths(lastDone, effectiveCadence);
     nextDue.setHours(0, 0, 0, 0);
     const diffDays = Math.round((nextDue.getTime() - today.getTime()) / MS_PER_DAY);
 
     const nextDueStr = toDateOnly(nextDue);
     const lastDoneStr = formatHumanDate(lastDone);
+    const cadencePhrase = cadenceLabel
+      ? `${cadenceLabel} every ${describeCadence(effectiveCadence)}`
+      : `every ${describeCadence(effectiveCadence)}`;
 
     let status: PreventiveStatus;
     let rationale: string;
 
+    const seasonal = rule.seasonal_window ?? null;
+    const inSeason = seasonal ? isInSeason(today, seasonal) : true;
+
     if (diffDays < 0) {
-      status = 'due';
-      const overdueBy = humanizeInterval(nextDue, today);
-      rationale = `Recommended for ${audience} every ${describeCadence(rule.cadence_months)}. ${footnote} Last completed ${lastDoneStr} — overdue by ${overdueBy}.`;
+      // Overdue by the cadence clock.
+      if (seasonal && !inSeason) {
+        status = 'due_soon';
+        const seasonStart = nextSeasonStart(today, seasonal);
+        rationale = `Recommended for ${audience}, ${cadencePhrase}. ${footnote} Last completed ${lastDoneStr}. Due during ${seasonal.label} — plan for ${formatHumanDate(seasonStart)}.`;
+      } else {
+        status = 'due';
+        const overdueBy = humanizeInterval(nextDue, today);
+        rationale = `Recommended for ${audience}, ${cadencePhrase}. ${footnote} Last completed ${lastDoneStr} — overdue by ${overdueBy}.`;
+      }
     } else if (diffDays <= DUE_SOON_WINDOW_DAYS) {
       status = 'due_soon';
       const inWhen = humanizeInterval(today, nextDue);
-      rationale = `Recommended for ${audience} every ${describeCadence(rule.cadence_months)}. ${footnote} Last completed ${lastDoneStr} — due in ${inWhen}.`;
+      rationale = seasonal
+        ? `Recommended for ${audience}, ${cadencePhrase}. ${footnote} Last completed ${lastDoneStr} — due in ${inWhen} (${seasonal.label}).`
+        : `Recommended for ${audience}, ${cadencePhrase}. ${footnote} Last completed ${lastDoneStr} — due in ${inWhen}.`;
     } else {
       status = 'up_to_date';
-      rationale = `Recommended for ${audience} every ${describeCadence(rule.cadence_months)}. ${footnote} Last completed ${lastDoneStr}. Next due ${formatHumanDate(nextDue)}.`;
+      rationale = `Recommended for ${audience}, ${cadencePhrase}. ${footnote} Last completed ${lastDoneStr}. Next due ${formatHumanDate(nextDue)}.`;
     }
 
     upsertProposal(
@@ -324,6 +452,8 @@ export function runEligibilityScan(
       nextDueStr,
       rationale,
       missingData,
+      hedis,
+      selectedMethodId,
       itemsToUpsert,
       itemsUnchanged,
     );
@@ -347,6 +477,7 @@ function upsertNeedsReview(
   existing: PreventiveItem | undefined,
   rationale: string,
   missingData: PreventiveMissingDataEntry[],
+  hedis: string | null,
   itemsToUpsert: PreventiveItemUpsert[],
 ) {
   const shouldUpdate =
@@ -365,6 +496,8 @@ function upsertNeedsReview(
       nextDueDate: null,
       rationale,
       missingData,
+      hedisMeasureCode: hedis,
+      selectedMethod: existing?.selected_method ?? null,
     });
   }
 }
@@ -377,6 +510,8 @@ function upsertProposal(
   nextDueDate: string | null,
   rationale: string,
   missingData: PreventiveMissingDataEntry[],
+  hedis: string | null,
+  selectedMethod: string | null,
   itemsToUpsert: PreventiveItemUpsert[],
   itemsUnchanged: string[],
 ) {
@@ -401,5 +536,7 @@ function upsertProposal(
     nextDueDate,
     rationale,
     missingData,
+    hedisMeasureCode: hedis,
+    selectedMethod,
   });
 }

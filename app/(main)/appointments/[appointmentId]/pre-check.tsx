@@ -33,11 +33,13 @@ import { Card } from '@/components/ui/Card';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useAppointmentDetail } from '@/hooks/useAppointments';
 import { usePreAppointmentCheck } from '@/hooks/usePreAppointmentCheck';
+import { useAddToNextVisitPrep } from '@/hooks/usePreventive';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type {
   PreAppointmentCheckItem,
   PreAppointmentCheckStatus,
+  PreAppointmentPreventiveSuggestion,
 } from '@/lib/types/appointments';
 
 const STATUS_ORDER: Record<PreAppointmentCheckStatus, number> = {
@@ -100,7 +102,10 @@ export default function PreCheckScreen() {
     appointmentId ?? null,
     appointment?.start_time ?? null,
     appointment?.provider_name ?? null,
+    appointment?.appointment_type ?? null,
   );
+
+  const addToPrep = useAddToNextVisitPrep();
 
   // Re-run the check every time the screen regains focus. Users bounce out to
   // update medications / add questions / etc. and come back — the status
@@ -215,13 +220,30 @@ export default function PreCheckScreen() {
         </View>
 
         <View style={styles.itemsSection}>
-          {sortedItems.map((item) => (
-            <CheckItemCard
-              key={item.id}
-              item={item}
-              onAction={() => handleAction(item)}
-            />
-          ))}
+          {sortedItems.map((item) =>
+            item.category === 'preventive_screenings' ? (
+              <PreventiveScreeningsCard
+                key={item.id}
+                item={item}
+                pending={addToPrep.isPending}
+                onDiscuss={(s) => {
+                  if (!activeProfileId) return;
+                  addToPrep.mutate({
+                    profileId: activeProfileId,
+                    preventiveItemId: s.preventiveItemId,
+                    ruleTitle: s.ruleTitle,
+                    questionText: s.questionForPrep,
+                  });
+                }}
+              />
+            ) : (
+              <CheckItemCard
+                key={item.id}
+                item={item}
+                onAction={() => handleAction(item)}
+              />
+            ),
+          )}
         </View>
 
         <View style={styles.footer}>
@@ -289,6 +311,106 @@ function CheckItemCard({
     </Card>
   );
 }
+
+function PreventiveScreeningsCard({
+  item,
+  pending,
+  onDiscuss,
+}: {
+  item: PreAppointmentCheckItem;
+  pending: boolean;
+  onDiscuss: (s: PreAppointmentPreventiveSuggestion) => void;
+}) {
+  const suggestions = item.preventiveSuggestions ?? [];
+  if (suggestions.length === 0) return null;
+
+  const tint = COLORS.primary.DEFAULT;
+  const background = COLORS.primary.DEFAULT + '0D';
+
+  return (
+    <Card style={{ ...styles.itemCard, backgroundColor: background }}>
+      <View style={styles.itemRow}>
+        <Ionicons name="shield-checkmark-outline" size={22} color={tint} />
+        <View style={styles.itemBody}>
+          <Text style={styles.itemTitle}>{item.title}</Text>
+          <Text style={styles.itemDetail}>{item.detail}</Text>
+        </View>
+      </View>
+
+      <View style={preventiveStyles.list}>
+        {suggestions.map((s) => (
+          <View key={s.preventiveItemId} style={preventiveStyles.row}>
+            <View style={preventiveStyles.rowTextWrap}>
+              <Text style={preventiveStyles.rowTitle}>{s.ruleTitle}</Text>
+              <Text style={preventiveStyles.rowDetail}>{s.suggestion}</Text>
+              {s.isRelevantToVisitType && (
+                <View style={preventiveStyles.relevantBadge}>
+                  <Ionicons name="star" size={11} color={COLORS.accent.dark} />
+                  <Text style={preventiveStyles.relevantBadgeText}>
+                    Fits this visit
+                  </Text>
+                </View>
+              )}
+            </View>
+            <Button
+              title="Add to prep"
+              variant="outline"
+              size="sm"
+              onPress={() => onDiscuss(s)}
+              disabled={pending}
+            />
+          </View>
+        ))}
+      </View>
+    </Card>
+  );
+}
+
+const preventiveStyles = StyleSheet.create({
+  list: {
+    marginTop: 12,
+    gap: 10,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border.light,
+  },
+  rowTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  rowTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  rowDetail: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    lineHeight: 18,
+  },
+  relevantBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: COLORS.accent.DEFAULT + '20',
+    marginTop: 4,
+  },
+  relevantBadgeText: {
+    fontSize: 11,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.accent.dark,
+  },
+});
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: COLORS.background.DEFAULT },

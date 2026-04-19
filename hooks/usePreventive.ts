@@ -7,6 +7,7 @@ import {
   runAndPersistScan,
   fetchPreventiveItemEvents,
   updateLastDoneDate,
+  setSelectedMethod,
   deferItem,
   declineItem,
   reopenItem,
@@ -147,6 +148,31 @@ export function useUpdateLastDoneDate() {
         params.itemId,
         params.date,
         params.source,
+        params.profileId,
+        params.householdId,
+      );
+      if (!result.success) throw new Error(result.error);
+      return result.data;
+    },
+    onSuccess: (data: PreventiveItem) => {
+      invalidatePreventiveCaches(queryClient, data.profile_id, data.id);
+    },
+  });
+}
+
+export function useSetSelectedMethod() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (params: {
+      itemId: string;
+      methodId: string | null;
+      profileId: string;
+      householdId: string;
+    }) => {
+      const result = await setSelectedMethod(
+        params.itemId,
+        params.methodId,
         params.profileId,
         params.householdId,
       );
@@ -412,6 +438,200 @@ export function useCommitIntentSheet() {
       queryClient.invalidateQueries({ queryKey: ['preventive', 'intentSheet', sheetId] });
       queryClient.invalidateQueries({ queryKey: ['preventive', 'briefing', profileId] });
       queryClient.invalidateQueries({ queryKey: ['tasks', 'list', profileId] });
+    },
+  });
+}
+
+// ── Phase 3 Item 5 Part 2: metrics, reports, reminder mode, wellness bundle ──
+
+import { calculatePreventiveMetrics } from '@/services/preventiveMetrics';
+import { generatePreventiveCareReport } from '@/services/preventiveReport';
+import { generateWellnessBundle } from '@/services/wellnessVisitBundle';
+import {
+  getPreventiveRemindersForAppointment,
+  addToNextVisitPrep,
+} from '@/services/preventiveReminders';
+import {
+  getReminderMode,
+  setReminderMode,
+  markDismissedNow,
+} from '@/services/preventiveReminderPrefs';
+import type {
+  PreventiveReminderMode,
+  PreventiveItemWithRule,
+} from '@/lib/types/preventive';
+
+export function usePreventiveMetrics(profileId: string | null) {
+  return useQuery({
+    queryKey: ['preventive', 'metrics', profileId],
+    queryFn: async () => {
+      if (!profileId) return null;
+      const result = await fetchPreventiveItems(profileId);
+      if (!result.success) throw new Error(result.error);
+      return calculatePreventiveMetrics({ profileId, items: result.data });
+    },
+    enabled: !!profileId,
+    staleTime: 1000 * 30,
+  });
+}
+
+export function usePreventiveReport() {
+  return useMutation({
+    mutationFn: async (params: {
+      profileId: string;
+      profileName: string;
+      items: PreventiveItemWithRule[];
+    }) => {
+      const metrics = calculatePreventiveMetrics({
+        profileId: params.profileId,
+        items: params.items,
+      });
+      return generatePreventiveCareReport({
+        profileId: params.profileId,
+        profileName: params.profileName,
+        items: params.items,
+        metrics,
+      });
+    },
+  });
+}
+
+export function usePreventiveReminderMode(profileId: string | null) {
+  const queryClient = useQueryClient();
+
+  const query = useQuery({
+    queryKey: ['preventive', 'reminderMode', profileId],
+    queryFn: async () => {
+      if (!profileId) return 'active' as PreventiveReminderMode;
+      return getReminderMode(profileId);
+    },
+    enabled: !!profileId,
+  });
+
+  const setMode = useMutation({
+    mutationFn: async (mode: PreventiveReminderMode) => {
+      if (!profileId) throw new Error('No profile');
+      await setReminderMode(profileId, mode);
+      return mode;
+    },
+    onSuccess: (mode) => {
+      queryClient.setQueryData(
+        ['preventive', 'reminderMode', profileId],
+        mode,
+      );
+      queryClient.invalidateQueries({
+        queryKey: ['preventive', 'briefing', profileId],
+      });
+    },
+  });
+
+  return {
+    mode: query.data ?? ('active' as PreventiveReminderMode),
+    isLoading: query.isLoading,
+    setMode: setMode.mutate,
+    isUpdating: setMode.isPending,
+  };
+}
+
+export function usePreventiveRemindersForAppointment(params: {
+  profileId: string | null;
+  householdId: string | null;
+  appointmentId: string | null;
+  appointmentDate: string | null;
+  appointmentProvider?: string;
+  appointmentType?: string;
+}) {
+  return useQuery({
+    queryKey: [
+      'preventive',
+      'apptReminders',
+      params.appointmentId,
+      params.appointmentDate,
+    ],
+    queryFn: async () => {
+      if (
+        !params.profileId ||
+        !params.householdId ||
+        !params.appointmentId ||
+        !params.appointmentDate
+      ) {
+        return [];
+      }
+      const result = await getPreventiveRemindersForAppointment({
+        profileId: params.profileId,
+        householdId: params.householdId,
+        appointmentId: params.appointmentId,
+        appointmentDate: params.appointmentDate,
+        appointmentProvider: params.appointmentProvider,
+        appointmentType: params.appointmentType,
+      });
+      if (!result.success) throw new Error(result.error);
+      return result.data;
+    },
+    enabled:
+      !!params.profileId &&
+      !!params.householdId &&
+      !!params.appointmentId &&
+      !!params.appointmentDate,
+  });
+}
+
+export function useAddToNextVisitPrep() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (params: {
+      profileId: string;
+      preventiveItemId: string;
+      ruleTitle: string;
+      questionText: string;
+    }) => {
+      const result = await addToNextVisitPrep(params);
+      if (!result.success) throw new Error(result.error);
+      return { ...result.data, profileId: params.profileId };
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({
+        queryKey: ['preventive', 'briefing', data.profileId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['preventive', 'items', data.profileId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['appointments', 'detail', data.appointmentId],
+      });
+      queryClient.invalidateQueries({ queryKey: ['tasks', 'list', data.profileId] });
+    },
+  });
+}
+
+export function useWellnessBundle(profileId: string | null) {
+  return useQuery({
+    queryKey: ['preventive', 'wellnessBundle', profileId],
+    queryFn: async () => {
+      if (!profileId) return null;
+      const result = await fetchPreventiveItems(profileId);
+      if (!result.success) throw new Error(result.error);
+      return generateWellnessBundle({
+        profileId,
+        preventiveItems: result.data,
+      });
+    },
+    enabled: !!profileId,
+  });
+}
+
+export function useDismissPreventiveBriefing() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { itemId: string; profileId: string }) => {
+      await markDismissedNow(params.itemId);
+      return params;
+    },
+    onSuccess: ({ profileId }) => {
+      queryClient.invalidateQueries({
+        queryKey: ['preventive', 'briefing', profileId],
+      });
     },
   });
 }

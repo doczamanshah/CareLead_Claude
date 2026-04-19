@@ -8,6 +8,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
+  Share,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -18,7 +19,11 @@ import {
   usePreventiveItems,
   useRunScan,
   useCreateIntentSheet,
+  usePreventiveMetrics,
+  usePreventiveReport,
+  useWellnessBundle,
 } from '@/hooks/usePreventive';
+import { complianceBand } from '@/services/preventiveMetrics';
 import { generatePreventiveIntentSheet } from '@/services/preventiveIntentSheet';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
@@ -48,6 +53,26 @@ function formatShortDate(dateStr: string | null): string | null {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function monthLabel(month: number): string {
+  const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return names[Math.max(0, Math.min(11, month - 1))];
+}
+
+function friendlyConditionLabel(triggers: string[]): string {
+  // Pick the most specific-looking trigger (shortest canonical name usually
+  // means the canonical condition keyword like "diabetes" or "ckd").
+  if (triggers.length === 0) return 'a chronic condition';
+  const primary = triggers[0];
+  if (primary.toLowerCase().includes('diabetes')) return 'diabetes management';
+  if (primary.toLowerCase().includes('smok') || primary.toLowerCase() === 'tobacco use')
+    return 'smoking history';
+  if (primary.toLowerCase().includes('heart') || primary.toLowerCase().includes('cardio'))
+    return 'heart health';
+  if (primary.toLowerCase().includes('ckd') || primary.toLowerCase().includes('kidney'))
+    return 'kidney health';
+  return primary;
+}
+
 function statusOrder(status: PreventiveStatus): number {
   if (status === 'due') return 0;
   if (status === 'due_soon') return 1;
@@ -63,6 +88,9 @@ export default function PreventiveCareScreen() {
   const { data: items, isLoading, refetch, error } = usePreventiveItems(activeProfileId);
   const runScan = useRunScan();
   const createIntentSheet = useCreateIntentSheet();
+  const { data: metrics } = usePreventiveMetrics(activeProfileId);
+  const { data: wellnessBundle } = useWellnessBundle(activeProfileId);
+  const report = usePreventiveReport();
   const [refreshing, setRefreshing] = useState(false);
   const [showUpToDate, setShowUpToDate] = useState(false);
   const [showScheduled, setShowScheduled] = useState(false);
@@ -110,6 +138,26 @@ export default function PreventiveCareScreen() {
       householdId: activeProfile.household_id,
     });
   }, [activeProfileId, activeProfile?.household_id, runScan]);
+
+  const handleShareReport = useCallback(async () => {
+    if (!activeProfileId || !items || !activeProfile) return;
+    try {
+      const result = await report.mutateAsync({
+        profileId: activeProfileId,
+        profileName: activeProfile.display_name ?? 'Patient',
+        items,
+      });
+      await Share.share({
+        message: result.text,
+        title: result.title,
+      });
+    } catch (err) {
+      Alert.alert(
+        'Could not share report',
+        err instanceof Error ? err.message : 'Please try again.',
+      );
+    }
+  }, [activeProfileId, activeProfile, items, report]);
 
   const handleCreatePlan = useCallback(
     (selectedItems: PreventiveItemWithRule[]) => {
@@ -236,9 +284,21 @@ export default function PreventiveCareScreen() {
           onBack={() => router.back()}
           onScan={handleManualScan}
           onAsk={() => router.push({ pathname: '/(main)/ask', params: { domain: 'preventive' } })}
+          onShare={handleShareReport}
+          shareDisabled={report.isPending || !items || items.length === 0}
           scanDisabled={isScanning}
           scanning={isScanning}
         />
+
+        {/* Preventive Health Score */}
+        {metrics && metrics.totalMeasures > 0 && (
+          <HealthScoreCard metrics={metrics} />
+        )}
+
+        {/* Wellness visit agenda */}
+        {wellnessBundle && wellnessBundle.totalGaps >= 2 && (
+          <WellnessAgendaCard bundle={wellnessBundle} />
+        )}
 
         {/* Initial scan indicator */}
         {showInitialScan ? (
@@ -389,14 +449,18 @@ function Header({
   onBack,
   onScan,
   onAsk,
+  onShare,
   scanDisabled,
   scanning,
+  shareDisabled,
 }: {
   onBack: () => void;
   onScan: () => void;
   onAsk: () => void;
+  onShare?: () => void;
   scanDisabled: boolean;
   scanning: boolean;
+  shareDisabled?: boolean;
 }) {
   return (
     <View style={styles.header}>
@@ -407,6 +471,21 @@ function Header({
       <View style={styles.headerRow}>
         <Text style={styles.title}>Preventive Care</Text>
         <View style={styles.headerActions}>
+          {onShare && (
+            <TouchableOpacity
+              onPress={onShare}
+              disabled={!!shareDisabled}
+              style={[styles.scanButton, shareDisabled && styles.scanButtonDisabled]}
+              activeOpacity={0.7}
+              accessibilityLabel="Share preventive care report"
+            >
+              <Ionicons
+                name="share-outline"
+                size={20}
+                color={COLORS.primary.DEFAULT}
+              />
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             onPress={onAsk}
             style={styles.askButton}
@@ -453,6 +532,176 @@ function Section({
     </View>
   );
 }
+
+function HealthScoreCard({
+  metrics,
+}: {
+  metrics: import('@/lib/types/preventive').PreventiveMetrics;
+}) {
+  const band = complianceBand(metrics.complianceRate);
+  const bandColor =
+    band === 'green'
+      ? COLORS.success.DEFAULT
+      : band === 'amber'
+      ? COLORS.warning.DEFAULT
+      : COLORS.error.DEFAULT;
+
+  const categoryEntries = Object.entries(metrics.byCategory);
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>YOUR PREVENTIVE HEALTH SCORE</Text>
+      <Card>
+        <View style={scoreStyles.topRow}>
+          <View style={scoreStyles.scoreCircle}>
+            <Text style={[scoreStyles.scoreValue, { color: bandColor }]}>
+              {metrics.complianceRate}%
+            </Text>
+          </View>
+          <View style={scoreStyles.scoreText}>
+            <Text style={scoreStyles.scoreHeadline}>
+              {metrics.upToDate} of {metrics.totalMeasures} screenings current
+            </Text>
+            {metrics.gapsClosed30Days > 0 ? (
+              <Text style={scoreStyles.scoreSub}>
+                {metrics.gapsClosed30Days} closed in the last 30 days — keep going!
+              </Text>
+            ) : metrics.gaps > 0 ? (
+              <Text style={scoreStyles.scoreSub}>
+                {metrics.gaps} {metrics.gaps === 1 ? 'gap' : 'gaps'} to close when you're ready.
+              </Text>
+            ) : (
+              <Text style={scoreStyles.scoreSub}>Nothing outstanding. Great job.</Text>
+            )}
+          </View>
+        </View>
+
+        {categoryEntries.length > 0 && (
+          <View style={scoreStyles.categoryRow}>
+            {categoryEntries.map(([label, stat]) => (
+              <View key={label} style={scoreStyles.categoryChipScore}>
+                <Text style={scoreStyles.categoryChipLabel}>{label}</Text>
+                <Text style={scoreStyles.categoryChipStat}>
+                  {stat.upToDate}/{stat.total}
+                </Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </Card>
+    </View>
+  );
+}
+
+function WellnessAgendaCard({
+  bundle,
+}: {
+  bundle: import('@/lib/types/preventive').WellnessBundle;
+}) {
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>WELLNESS VISIT AGENDA</Text>
+      <Card>
+        <Text style={scoreStyles.wellnessHeadline}>
+          {bundle.totalGaps} {bundle.totalGaps === 1 ? 'item' : 'items'} to bring up at your next wellness visit
+        </Text>
+        {bundle.canCloseAtVisit.length > 0 && (
+          <View style={scoreStyles.wellnessSubsection}>
+            <Text style={scoreStyles.wellnessSubtitle}>Can close at the visit</Text>
+            {bundle.canCloseAtVisit.map((it) => (
+              <Text key={it.id} style={scoreStyles.wellnessLine}>
+                • {it.rule.title}
+              </Text>
+            ))}
+          </View>
+        )}
+        {bundle.needsSeparateScheduling.length > 0 && (
+          <View style={scoreStyles.wellnessSubsection}>
+            <Text style={scoreStyles.wellnessSubtitle}>Needs separate scheduling</Text>
+            {bundle.needsSeparateScheduling.map((it) => (
+              <Text key={it.id} style={scoreStyles.wellnessLine}>
+                • {it.rule.title}
+              </Text>
+            ))}
+          </View>
+        )}
+      </Card>
+    </View>
+  );
+}
+
+const scoreStyles = StyleSheet.create({
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  scoreCircle: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 3,
+    borderColor: COLORS.border.DEFAULT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scoreValue: {
+    fontSize: FONT_SIZES.xl,
+    fontWeight: FONT_WEIGHTS.bold,
+  },
+  scoreText: { flex: 1, gap: 4 },
+  scoreHeadline: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  scoreSub: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    lineHeight: 18,
+  },
+  categoryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 14,
+  },
+  categoryChipScore: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    backgroundColor: COLORS.surface.muted,
+    flexDirection: 'row',
+    gap: 6,
+  },
+  categoryChipLabel: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+  },
+  categoryChipStat: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  wellnessHeadline: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  wellnessSubsection: { marginTop: 12 },
+  wellnessSubtitle: {
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    color: COLORS.text.tertiary,
+    marginBottom: 4,
+  },
+  wellnessLine: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.DEFAULT,
+    lineHeight: 20,
+  },
+});
 
 function CollapsibleSection({
   title,
@@ -559,8 +808,21 @@ function PreventiveItemCard({
           {/* Up-to-date meta line */}
           {upToDate && (lastDone || nextDue) && (
             <Text style={styles.itemMeta}>
-              {lastDone ? `Last done: ${lastDone}` : 'Completed'}
-              {nextDue ? `  ·  Next due: ${nextDue}` : ''}
+              {(() => {
+                const methods = item.rule.screening_methods ?? null;
+                const method =
+                  methods && item.selected_method
+                    ? methods.find((m) => m.method_id === item.selected_method) ?? null
+                    : null;
+                const prefix = method ? method.name : lastDone ? 'Last done' : 'Completed';
+                const datePart = lastDone
+                  ? method
+                    ? ` — last done ${lastDone}`
+                    : `: ${lastDone}`
+                  : '';
+                const nextPart = nextDue ? `  ·  Next due: ${nextDue}` : '';
+                return `${prefix}${datePart}${nextPart}`;
+              })()}
             </Text>
           )}
 
@@ -569,6 +831,29 @@ function PreventiveItemCard({
             <Text style={styles.itemMeta} numberOfLines={2}>
               {item.declined_reason}
             </Text>
+          )}
+
+          {/* Contextual badges */}
+          {(item.rule.seasonal_window || (item.rule.is_condition_dependent && item.rule.condition_triggers)) && (
+            <View style={styles.badgeRow}>
+              {item.rule.seasonal_window && (
+                <View style={styles.seasonalBadge}>
+                  <Ionicons name="sunny-outline" size={11} color={COLORS.accent.dark} />
+                  <Text style={styles.seasonalBadgeText}>
+                    {item.rule.seasonal_window.label}: {monthLabel(item.rule.seasonal_window.start_month)}-
+                    {monthLabel(item.rule.seasonal_window.end_month)}
+                  </Text>
+                </View>
+              )}
+              {item.rule.is_condition_dependent && item.rule.condition_triggers && (
+                <View style={styles.conditionBadge}>
+                  <Ionicons name="pulse-outline" size={11} color={COLORS.primary.DEFAULT} />
+                  <Text style={styles.conditionBadgeText}>
+                    For {friendlyConditionLabel(item.rule.condition_triggers)}
+                  </Text>
+                </View>
+              )}
+            </View>
           )}
 
           <View style={styles.itemFooter}>
@@ -599,6 +884,8 @@ function shortPromptLabel(field: string): string {
       return 'Sex needed';
     case 'conditions':
       return 'More health info needed';
+    case 'selected_method':
+      return 'Pick a screening type';
     default:
       return 'More info needed';
   }
@@ -888,6 +1175,40 @@ const styles = StyleSheet.create({
     gap: 8,
     marginTop: 10,
     flexWrap: 'wrap',
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  seasonalBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: COLORS.accent.DEFAULT + '1F',
+  },
+  seasonalBadgeText: {
+    fontSize: 11,
+    color: COLORS.accent.dark,
+    fontWeight: FONT_WEIGHTS.medium,
+  },
+  conditionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+  },
+  conditionBadgeText: {
+    fontSize: 11,
+    color: COLORS.primary.DEFAULT,
+    fontWeight: FONT_WEIGHTS.medium,
   },
   categoryChip: {
     paddingHorizontal: 8,

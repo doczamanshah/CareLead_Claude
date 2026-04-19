@@ -331,7 +331,18 @@ export type PreAppointmentCheckCategory =
   | 'insurance'
   | 'care_team'
   | 'questions'
-  | 'documents';
+  | 'documents'
+  | 'preventive_screenings';
+
+export interface PreAppointmentPreventiveSuggestion {
+  preventiveItemId: string;
+  ruleTitle: string;
+  suggestion: string;
+  questionForPrep: string;
+  priority: 'high' | 'medium' | 'low';
+  isRelevantToVisitType: boolean;
+  status: 'due' | 'due_soon';
+}
 
 export interface PreAppointmentCheckItem {
   id: string;
@@ -342,6 +353,8 @@ export interface PreAppointmentCheckItem {
   actionLabel?: string;
   actionRoute?: string;
   actionParams?: Record<string, string>;
+  /** Populated only when category === 'preventive_screenings'. */
+  preventiveSuggestions?: PreAppointmentPreventiveSuggestion[];
 }
 
 export interface PreAppointmentCheckResult {

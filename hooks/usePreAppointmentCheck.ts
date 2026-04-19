@@ -14,6 +14,7 @@ export function usePreAppointmentCheck(
   appointmentId: string | null,
   appointmentDate: string | null,
   appointmentProvider: string | null,
+  appointmentType?: string | null,
 ) {
   return useQuery({
     queryKey: [
@@ -22,6 +23,7 @@ export function usePreAppointmentCheck(
       appointmentId,
       appointmentDate,
       appointmentProvider,
+      appointmentType,
     ],
     queryFn: async () => {
       if (!profileId || !householdId || !appointmentDate) {
@@ -32,6 +34,8 @@ export function usePreAppointmentCheck(
         householdId,
         appointmentDate,
         appointmentProvider: appointmentProvider ?? undefined,
+        appointmentId: appointmentId ?? undefined,
+        appointmentType: appointmentType ?? undefined,
       });
       if (!result.success) throw new Error(result.error);
       return result.data;

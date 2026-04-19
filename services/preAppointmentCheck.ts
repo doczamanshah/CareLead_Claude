@@ -12,9 +12,11 @@
  */
 
 import { supabase } from '@/lib/supabase';
+import { getPreventiveRemindersForAppointment } from '@/services/preventiveReminders';
 import type {
   PreAppointmentCheckItem,
   PreAppointmentCheckResult,
+  PreAppointmentPreventiveSuggestion,
   VisitPrep,
 } from '@/lib/types/appointments';
 import type { Medication } from '@/lib/types/medications';
@@ -29,6 +31,9 @@ interface RunPreAppointmentCheckParams {
   householdId: string;
   appointmentDate: string;
   appointmentProvider?: string;
+  /** Optional — passed through to preventive reminder relevance scoring. */
+  appointmentId?: string;
+  appointmentType?: string;
 }
 
 const MEDICATION_STALE_DAYS = 90;
@@ -101,6 +106,15 @@ export async function runPreAppointmentCheck(
     | { id: string; prep_json: VisitPrep | null; start_time: string }
     | undefined;
 
+  const preventiveItem = await buildPreventiveScreeningsItem({
+    profileId,
+    householdId: params.householdId,
+    appointmentId: params.appointmentId ?? currentAppointment?.id ?? null,
+    appointmentDate: params.appointmentDate,
+    appointmentProvider: params.appointmentProvider,
+    appointmentType: params.appointmentType,
+  });
+
   const items: PreAppointmentCheckItem[] = [
     buildMedicationsItem(meds),
     buildAllergiesItem(facts),
@@ -109,6 +123,7 @@ export async function runPreAppointmentCheck(
     buildCareTeamItem(facts, params.appointmentProvider),
     buildQuestionsItem(currentAppointment?.prep_json ?? null, currentAppointment?.id ?? null),
     buildDocumentsItem(recentResults),
+    ...(preventiveItem ? [preventiveItem] : []),
   ];
 
   const completedCount = items.filter((i) => i.status === 'good').length;
@@ -322,6 +337,54 @@ function buildDocumentsItem(
     status: 'action_needed',
     actionLabel: 'Upload document',
     actionRoute: '/(main)/capture/upload',
+  };
+}
+
+async function buildPreventiveScreeningsItem(params: {
+  profileId: string;
+  householdId: string;
+  appointmentId: string | null;
+  appointmentDate: string;
+  appointmentProvider?: string;
+  appointmentType?: string;
+}): Promise<PreAppointmentCheckItem | null> {
+  if (!params.appointmentId) return null;
+
+  const result = await getPreventiveRemindersForAppointment({
+    profileId: params.profileId,
+    householdId: params.householdId,
+    appointmentId: params.appointmentId,
+    appointmentDate: params.appointmentDate,
+    appointmentProvider: params.appointmentProvider,
+    appointmentType: params.appointmentType,
+  });
+  if (!result.success) return null;
+  if (result.data.length === 0) return null;
+
+  const suggestions: PreAppointmentPreventiveSuggestion[] = result.data
+    .filter((r) => r.status === 'due' || r.status === 'due_soon')
+    .map((r) => ({
+      preventiveItemId: r.preventiveItemId,
+      ruleTitle: r.ruleTitle,
+      suggestion: r.suggestion,
+      questionForPrep: r.questionForPrep,
+      priority: r.priority,
+      isRelevantToVisitType: r.isRelevantToVisitType,
+      status: r.status as 'due' | 'due_soon',
+    }));
+
+  if (suggestions.length === 0) return null;
+
+  const countLabel = `${suggestions.length} ${
+    suggestions.length === 1 ? 'screening' : 'screenings'
+  }`;
+  return {
+    id: 'preventive_screenings',
+    category: 'preventive_screenings',
+    title: 'Preventive screenings to discuss',
+    detail: `You have ${countLabel} due. Add them to your visit prep with one tap.`,
+    status: 'action_needed',
+    preventiveSuggestions: suggestions,
   };
 }
 

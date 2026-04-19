@@ -80,7 +80,13 @@ export async function fetchPreventiveItems(
         cadence_months,
         guideline_source,
         guideline_version,
-        guideline_url
+        guideline_url,
+        screening_methods,
+        hedis_measure_code,
+        condition_triggers,
+        is_condition_dependent,
+        seasonal_window,
+        measure_type
       )
     `,
     )
@@ -114,7 +120,13 @@ export async function fetchPreventiveItem(
         cadence_months,
         guideline_source,
         guideline_version,
-        guideline_url
+        guideline_url,
+        screening_methods,
+        hedis_measure_code,
+        condition_triggers,
+        is_condition_dependent,
+        seasonal_window,
+        measure_type
       )
     `,
     )
@@ -153,16 +165,70 @@ export async function upsertPreventiveItems(
     existingByRule.set(row.rule_id, { id: row.id, status: row.status });
   }
 
-  const rows = upserts.map((u) => ({
-    profile_id: profileId,
-    household_id: householdId,
-    rule_id: u.ruleId,
-    status: u.status,
-    due_date: u.dueDate,
-    next_due_date: u.nextDueDate,
-    rationale: u.rationale,
-    missing_data: u.missingData,
-  }));
+  // Gap-tracking timestamps. identified_at gets set the first time a row
+  // is created in a gap state; closed_at gets set when we transition into
+  // a closed state. For other rows we preserve whatever the DB has.
+  const GAP_STATUSES: PreventiveStatus[] = ['due', 'due_soon', 'needs_review'];
+  const existingGapData = new Map<
+    string,
+    { gap_identified_at: string | null; gap_closed_at: string | null }
+  >();
+  if (ruleIds.length > 0) {
+    const { data: gapRows } = await supabase
+      .from('preventive_items')
+      .select('rule_id, gap_identified_at, gap_closed_at')
+      .eq('profile_id', profileId)
+      .in('rule_id', ruleIds);
+    for (const row of (gapRows ?? []) as {
+      rule_id: string;
+      gap_identified_at: string | null;
+      gap_closed_at: string | null;
+    }[]) {
+      existingGapData.set(row.rule_id, {
+        gap_identified_at: row.gap_identified_at,
+        gap_closed_at: row.gap_closed_at,
+      });
+    }
+  }
+
+  const nowIso = new Date().toISOString();
+
+  const rows = upserts.map((u) => {
+    const prior = existingByRule.get(u.ruleId);
+    const priorGap = existingGapData.get(u.ruleId);
+    const isNewRow = !prior;
+    const becomingGap = GAP_STATUSES.includes(u.status);
+    const becomingClosed = u.status === 'completed' || u.status === 'up_to_date';
+
+    let gapIdentifiedAt = priorGap?.gap_identified_at ?? null;
+    if (!gapIdentifiedAt && isNewRow && becomingGap) {
+      gapIdentifiedAt = nowIso;
+    }
+
+    let gapClosedAt = priorGap?.gap_closed_at ?? null;
+    if (becomingClosed && !gapClosedAt) {
+      gapClosedAt = nowIso;
+    }
+    if (!becomingClosed && becomingGap) {
+      // Reopened into a gap state — clear the prior closure.
+      gapClosedAt = null;
+    }
+
+    return {
+      profile_id: profileId,
+      household_id: householdId,
+      rule_id: u.ruleId,
+      status: u.status,
+      due_date: u.dueDate,
+      next_due_date: u.nextDueDate,
+      rationale: u.rationale,
+      missing_data: u.missingData,
+      hedis_measure_code: u.hedisMeasureCode,
+      selected_method: u.selectedMethod,
+      gap_identified_at: gapIdentifiedAt,
+      gap_closed_at: gapClosedAt,
+    };
+  });
 
   const { data, error } = await supabase
     .from('preventive_items')
@@ -255,6 +321,9 @@ export async function updatePreventiveItem(
       | 'linked_task_id'
       | 'linked_appointment_id'
       | 'notes'
+      | 'selected_method'
+      | 'gap_identified_at'
+      | 'gap_closed_at'
     >
   >,
   createdBy: 'user' | 'system' | 'extraction' = 'user',
@@ -484,6 +553,45 @@ export async function updateLastDoneDate(
 
   const fresh = rescan.data.savedItems.find((i) => i.id === itemId);
   return { success: true, data: fresh ?? item };
+}
+
+/**
+ * Record which screening method the user completed/will complete. Triggers
+ * a rescan so the item's next_due_date recomputes against the method's cadence.
+ */
+export async function setSelectedMethod(
+  itemId: string,
+  methodId: string | null,
+  profileId: string,
+  householdId: string,
+): Promise<ServiceResult<PreventiveItem>> {
+  const { data, error } = await supabase
+    .from('preventive_items')
+    .update({ selected_method: methodId })
+    .eq('id', itemId)
+    .select()
+    .single();
+
+  if (error || !data) {
+    return { success: false, error: error?.message ?? 'Failed to update method' };
+  }
+
+  await createPreventiveEvent({
+    itemId,
+    profileId,
+    householdId,
+    eventType: 'data_updated',
+    detail: { field: 'selected_method', value: methodId },
+    createdBy: 'user',
+  });
+
+  const rescan = await runAndPersistScan(profileId, householdId);
+  if (!rescan.success) {
+    return { success: true, data: data as PreventiveItem };
+  }
+
+  const fresh = rescan.data.savedItems.find((i) => i.id === itemId);
+  return { success: true, data: fresh ?? (data as PreventiveItem) };
 }
 
 /**
@@ -1082,10 +1190,14 @@ export async function markAsCompleted(params: {
     userId,
   } = params;
 
-  // Load the item + its rule cadence so we can compute next_due_date.
+  // Load the item + rule cadence and screening_methods so we can compute
+  // next_due_date — preferring the user's selected_method cadence when the
+  // rule supports multiple screening methods.
   const { data: itemRow, error: itemErr } = await supabase
     .from('preventive_items')
-    .select('id, status, linked_task_id, rule_id, rule:preventive_rules!rule_id(cadence_months)')
+    .select(
+      'id, status, linked_task_id, rule_id, selected_method, rule:preventive_rules!rule_id(cadence_months, screening_methods)',
+    )
     .eq('id', itemId)
     .single();
 
@@ -1095,14 +1207,32 @@ export async function markAsCompleted(params: {
 
   const priorStatus = (itemRow.status as PreventiveStatus | undefined) ?? null;
   const linkedTaskId = (itemRow.linked_task_id as string | null) ?? null;
+  const selectedMethod = (itemRow.selected_method as string | null) ?? null;
   const ruleRaw = itemRow.rule as unknown;
   const ruleObj = Array.isArray(ruleRaw)
-    ? (ruleRaw[0] as { cadence_months?: number | null } | undefined)
-    : (ruleRaw as { cadence_months?: number | null } | null | undefined);
-  const cadenceMonths =
-    ruleObj && typeof ruleObj.cadence_months === 'number'
-      ? ruleObj.cadence_months
+    ? (ruleRaw[0] as
+        | { cadence_months?: number | null; screening_methods?: unknown }
+        | undefined)
+    : (ruleRaw as
+        | { cadence_months?: number | null; screening_methods?: unknown }
+        | null
+        | undefined);
+
+  const methods =
+    ruleObj && Array.isArray(ruleObj.screening_methods)
+      ? (ruleObj.screening_methods as { method_id: string; cadence_months: number }[])
       : null;
+
+  let cadenceMonths: number | null = null;
+  if (methods && methods.length > 0 && selectedMethod) {
+    const picked = methods.find((m) => m.method_id === selectedMethod);
+    cadenceMonths = picked ? picked.cadence_months : null;
+  } else if (!methods || methods.length === 0) {
+    cadenceMonths =
+      ruleObj && typeof ruleObj.cadence_months === 'number'
+        ? ruleObj.cadence_months
+        : null;
+  }
 
   let nextDueDate: string | null = null;
   if (cadenceMonths !== null && cadenceMonths > 0) {
@@ -1119,6 +1249,7 @@ export async function markAsCompleted(params: {
     next_due_date: nextDueDate,
     due_date: null,
     missing_data: [],
+    gap_closed_at: new Date().toISOString(),
   };
   if (evidenceDocumentPath !== undefined) {
     updates.last_done_evidence_path = evidenceDocumentPath;

@@ -58,6 +58,26 @@ export interface PreventiveMissingDataEntry {
   prompt: string;
 }
 
+export type MeasureType =
+  | 'screening'
+  | 'immunization'
+  | 'monitoring'
+  | 'counseling'
+  | 'visit';
+
+export interface ScreeningMethod {
+  method_id: string;
+  name: string;
+  cadence_months: number;
+  description: string;
+}
+
+export interface SeasonalWindow {
+  start_month: number;
+  end_month: number;
+  label: string;
+}
+
 export interface PreventiveRule {
   id: string;
   code: string;
@@ -72,6 +92,12 @@ export interface PreventiveRule {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  screening_methods: ScreeningMethod[] | null;
+  hedis_measure_code: string | null;
+  condition_triggers: string[] | null;
+  is_condition_dependent: boolean;
+  seasonal_window: SeasonalWindow | null;
+  measure_type: MeasureType;
 }
 
 export interface PreventiveItem {
@@ -97,12 +123,29 @@ export interface PreventiveItem {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  selected_method: string | null;
+  hedis_measure_code: string | null;
+  gap_identified_at: string | null;
+  gap_closed_at: string | null;
 }
 
 export interface PreventiveItemWithRule extends PreventiveItem {
   rule: Pick<
     PreventiveRule,
-    'code' | 'title' | 'description' | 'category' | 'cadence_months' | 'guideline_source' | 'guideline_version' | 'guideline_url'
+    | 'code'
+    | 'title'
+    | 'description'
+    | 'category'
+    | 'cadence_months'
+    | 'guideline_source'
+    | 'guideline_version'
+    | 'guideline_url'
+    | 'screening_methods'
+    | 'hedis_measure_code'
+    | 'condition_triggers'
+    | 'is_condition_dependent'
+    | 'seasonal_window'
+    | 'measure_type'
   >;
 }
 
@@ -158,6 +201,71 @@ export interface PreventiveIntentSheet {
   committed_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ── Phase 3 Item 5 Part 2: reminders, metrics, reports ──────────────────
+
+export type PreventiveReminderMode = 'active' | 'visit_only' | 'quiet';
+
+export const DEFAULT_PREVENTIVE_REMINDER_MODE: PreventiveReminderMode = 'active';
+
+export type PreventiveBriefingActionType =
+  | 'discuss_at_visit'
+  | 'schedule'
+  | 'view_details'
+  | 'get_at_pharmacy';
+
+export interface PreventiveBriefingStrategyItem {
+  id: string;
+  title: string;
+  detail: string;
+  priority: 'high' | 'medium' | 'low';
+  itemId: string;
+  actionLabel: string;
+  actionType: PreventiveBriefingActionType;
+}
+
+export interface PreventiveAppointmentReminder {
+  preventiveItemId: string;
+  ruleTitle: string;
+  hedisCode: string | null;
+  status: PreventiveStatus;
+  suggestion: string;
+  questionForPrep: string;
+  priority: 'high' | 'medium' | 'low';
+  isRelevantToVisitType: boolean;
+}
+
+export interface WellnessBundle {
+  dueItems: PreventiveItemWithRule[];
+  totalGaps: number;
+  suggestedAgenda: string[];
+  canCloseAtVisit: PreventiveItemWithRule[];
+  needsSeparateScheduling: PreventiveItemWithRule[];
+}
+
+export interface PreventiveCategoryStat {
+  total: number;
+  upToDate: number;
+}
+
+export interface PreventiveMetrics {
+  totalMeasures: number;
+  upToDate: number;
+  gaps: number;
+  /** 0-100, integer. */
+  complianceRate: number;
+  gapsClosed30Days: number;
+  gapsClosed90Days: number;
+  averageTimeToClosureDays: number | null;
+  hedisCompliance: Record<string, boolean>;
+  byCategory: Record<string, PreventiveCategoryStat>;
+}
+
+export interface PreventiveReport {
+  title: string;
+  generatedAt: string;
+  text: string;
 }
 
 export const PREVENTIVE_STATUS_LABELS: Record<PreventiveStatus, string> = {

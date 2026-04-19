@@ -24,6 +24,8 @@ import {
   useReviewFrequency,
   useSetReviewFrequency,
 } from '@/hooks/useProfileReview';
+import { usePreventiveReminderMode } from '@/hooks/usePreventive';
+import type { PreventiveReminderMode } from '@/lib/types/preventive';
 import { useAuthStore } from '@/stores/authStore';
 import type { ReviewFrequency } from '@/lib/types/profile';
 import {
@@ -84,6 +86,28 @@ const SESSION_DURATION_OPTIONS: { key: SessionDuration; label: string }[] = [
   { key: '30d', label: '30 days' },
 ];
 
+const PREVENTIVE_REMINDER_OPTIONS: {
+  key: PreventiveReminderMode;
+  label: string;
+  description: string;
+}[] = [
+  {
+    key: 'active',
+    label: 'Active',
+    description: 'Reminders in your briefing, appointment prep, and monthly check-ins.',
+  },
+  {
+    key: 'visit_only',
+    label: 'Visit-only',
+    description: 'Only when an appointment is coming up — no standalone nudges.',
+  },
+  {
+    key: 'quiet',
+    label: 'Quiet',
+    description: 'No proactive reminders. Preventive info stays on the dashboard.',
+  },
+];
+
 const REVIEW_FREQUENCY_OPTIONS: { key: ReviewFrequency; label: string }[] = [
   { key: 'quarterly', label: 'Every 3 months' },
   { key: 'biannual', label: 'Every 6 months' },
@@ -137,6 +161,14 @@ export default function SettingsScreen() {
   const { data: reviewFrequency } = useReviewFrequency();
   const setFrequencyMutation = useSetReviewFrequency();
   const [showReviewFrequencyOptions, setShowReviewFrequencyOptions] = useState(false);
+
+  const {
+    mode: preventiveReminderMode,
+    setMode: setPreventiveReminderMode,
+    isUpdating: preventiveReminderUpdating,
+  } = usePreventiveReminderMode(activeProfileId);
+  const [showPreventiveReminderOptions, setShowPreventiveReminderOptions] =
+    useState(false);
 
   const [capability, setCapability] = useState<BiometricCapability | null>(null);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
@@ -602,6 +634,73 @@ export default function SettingsScreen() {
                         color={COLORS.primary.DEFAULT}
                       />
                     ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.pinWrap}>
+          <TouchableOpacity
+            style={styles.autoLockRow}
+            activeOpacity={0.7}
+            onPress={() => setShowPreventiveReminderOptions((v) => !v)}
+            disabled={!activeProfileId}
+          >
+            <View style={styles.autoLockContent}>
+              <Text style={styles.autoLockLabel}>Preventive reminders</Text>
+              <Text style={styles.autoLockValue}>
+                {PREVENTIVE_REMINDER_OPTIONS.find(
+                  (o) => o.key === preventiveReminderMode,
+                )?.label ?? 'Active'}
+              </Text>
+            </View>
+            <Ionicons
+              name={showPreventiveReminderOptions ? 'chevron-up' : 'chevron-down'}
+              size={20}
+              color={COLORS.text.tertiary}
+            />
+          </TouchableOpacity>
+
+          {showPreventiveReminderOptions ? (
+            <View style={styles.autoLockOptions}>
+              {PREVENTIVE_REMINDER_OPTIONS.map((opt) => {
+                const selected = preventiveReminderMode === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[
+                      styles.optionCard,
+                      selected && styles.optionCardSelected,
+                    ]}
+                    onPress={() => {
+                      setPreventiveReminderMode(opt.key);
+                      setShowPreventiveReminderOptions(false);
+                    }}
+                    activeOpacity={0.7}
+                    disabled={preventiveReminderUpdating}
+                  >
+                    <View style={styles.optionRow}>
+                      <View
+                        style={[styles.radio, selected && styles.radioSelected]}
+                      >
+                        {selected && <View style={styles.radioDot} />}
+                      </View>
+                      <View style={styles.optionContent}>
+                        <Text
+                          style={[
+                            styles.optionLabel,
+                            selected && styles.optionLabelSelected,
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                        <Text style={styles.optionDescription}>
+                          {opt.description}
+                        </Text>
+                      </View>
+                    </View>
                   </TouchableOpacity>
                 );
               })}

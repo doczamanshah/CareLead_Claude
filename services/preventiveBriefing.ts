@@ -1,13 +1,18 @@
 /**
- * Preventive briefing — aggregates preventive_items signals into a small,
- * prioritized list of items for the Home screen's Today's Briefing and the
- * Today Detail screen. Keeps queries scoped to the active profile.
+ * Home-screen adapter for preventive briefing.
+ *
+ * Delegates to the strategy engine (services/preventiveBriefingStrategy.ts)
+ * so the Home briefing honors the user's reminder mode, cooldowns, seasonal
+ * awareness, and appointment anchoring — then maps its richer output to the
+ * lightweight shape the Home screen already consumes.
  */
 
 import { supabase } from '@/lib/supabase';
+import { getReminderMode } from '@/services/preventiveReminderPrefs';
+import { getPreventiveBriefingItems } from '@/services/preventiveBriefingStrategy';
 import type {
-  PreventiveMissingDataEntry,
-  PreventiveStatus,
+  PreventiveItemWithRule,
+  PreventiveBriefingStrategyItem,
 } from '@/lib/types/preventive';
 
 type ServiceResult<T> =
@@ -19,7 +24,10 @@ export type PreventiveBriefingKind =
   | 'due_multi'
   | 'due_soon_single'
   | 'needs_review_multi'
-  | 'recently_completed';
+  | 'recently_completed'
+  | 'appointment_prep'
+  | 'pharmacy'
+  | 'progress';
 
 export interface PreventiveBriefingItem {
   key: string;
@@ -34,140 +42,195 @@ export interface PreventiveBriefingItem {
 const RECENT_COMPLETION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
- * Produce up to `max` preventive briefing items for a profile, prioritized:
- *   1. Overdue (due) — single or aggregated multi
- *   2. Due soon — single (only when no due items)
- *   3. Needs review with missing data — aggregated
- *   4. Recently completed (last 7 days) — single, positive reinforcement
+ * Produce up to `max` preventive briefing items for the Home screen.
+ * Ordering: strategy's high/medium/low priority first, then the
+ * "recently completed" celebration last (positive reinforcement).
  */
 export async function fetchPreventiveBriefingItems(
   profileId: string,
   max: number = 3,
 ): Promise<ServiceResult<PreventiveBriefingItem[]>> {
+  const [itemsRes, apptsRes, mode] = await Promise.all([
+    loadPreventiveItems(profileId),
+    loadUpcomingAppointments(profileId),
+    getReminderMode(profileId),
+  ]);
+
+  if (!itemsRes.success) return itemsRes;
+  if (!apptsRes.success) return apptsRes;
+
+  const strategyItems = await getPreventiveBriefingItems({
+    profileId,
+    reminderMode: mode,
+    preventiveItems: itemsRes.data,
+    upcomingAppointments: apptsRes.data,
+  });
+
+  const out: PreventiveBriefingItem[] = strategyItems.map((s, idx) =>
+    mapStrategyItem(s, idx),
+  );
+
+  // Celebration bucket is separate from the cadence engine so quick wins
+  // still surface even when nothing is due.
+  const recent = findRecentlyCompleted(itemsRes.data);
+  if (recent && out.length < max) {
+    out.push({
+      key: `done:${recent.id}`,
+      kind: 'recently_completed',
+      itemId: recent.id,
+      message: `Nice work! ${recent.rule.title} is done`,
+      icon: 'checkmark-circle',
+      color: 'success',
+      sortRank: 9,
+    });
+  }
+
+  out.sort((a, b) => a.sortRank - b.sortRank);
+  return { success: true, data: out.slice(0, max) };
+}
+
+// ── Loaders ──────────────────────────────────────────────────────────────
+
+async function loadPreventiveItems(
+  profileId: string,
+): Promise<ServiceResult<PreventiveItemWithRule[]>> {
   const { data, error } = await supabase
     .from('preventive_items')
     .select(
       `
-      id,
-      status,
-      missing_data,
-      updated_at,
+      *,
       rule:preventive_rules!rule_id (
-        title
+        code,
+        title,
+        description,
+        category,
+        cadence_months,
+        guideline_source,
+        guideline_version,
+        guideline_url,
+        screening_methods,
+        hedis_measure_code,
+        condition_triggers,
+        is_condition_dependent,
+        seasonal_window,
+        measure_type
       )
     `,
     )
-    .eq('profile_id', profileId)
-    .in('status', ['due', 'due_soon', 'needs_review', 'completed', 'up_to_date'])
-    .order('updated_at', { ascending: false });
+    .eq('profile_id', profileId);
 
   if (error) {
     return { success: false, error: error.message, code: error.code };
   }
+  return { success: true, data: (data ?? []) as PreventiveItemWithRule[] };
+}
 
-  interface BriefingRow {
-    id: string;
-    status: PreventiveStatus;
-    missing_data: PreventiveMissingDataEntry[] | null;
-    updated_at: string;
-    rule: { title: string } | { title: string }[] | null;
+async function loadUpcomingAppointments(
+  profileId: string,
+): Promise<
+  ServiceResult<
+    { id: string; title: string; provider_name: string | null; start_time: string }[]
+  >
+> {
+  const now = new Date();
+  const end = new Date();
+  end.setDate(end.getDate() + 7);
+
+  const { data, error } = await supabase
+    .from('apt_appointments')
+    .select('id, title, provider_name, start_time, status')
+    .eq('profile_id', profileId)
+    .is('deleted_at', null)
+    .in('status', ['scheduled', 'preparing', 'ready'])
+    .gte('start_time', now.toISOString())
+    .lte('start_time', end.toISOString())
+    .order('start_time', { ascending: true });
+
+  if (error) {
+    return { success: false, error: error.message, code: error.code };
   }
-
-  const rows = (data ?? []) as BriefingRow[];
-
-  const getRuleTitle = (raw: BriefingRow['rule']): string => {
-    if (!raw) return 'screening';
-    if (Array.isArray(raw)) return raw[0]?.title ?? 'screening';
-    return raw.title;
+  return {
+    success: true,
+    data: (data ?? []) as {
+      id: string;
+      title: string;
+      provider_name: string | null;
+      start_time: string;
+    }[],
   };
+}
 
-  const items: PreventiveBriefingItem[] = [];
+// ── Mappers ──────────────────────────────────────────────────────────────
 
-  // a) Overdue (due)
-  const due = rows.filter((r) => r.status === 'due');
-  if (due.length === 1) {
-    const r = due[0];
-    items.push({
-      key: `due:${r.id}`,
-      kind: 'due_single',
-      itemId: r.id,
-      message: `Your ${getRuleTitle(r.rule)} is due`,
-      icon: 'alert-circle',
-      color: 'critical',
-      sortRank: 0,
-    });
-  } else if (due.length > 1) {
-    items.push({
-      key: 'due:multi',
-      kind: 'due_multi',
-      itemId: null,
-      message: `You have ${due.length} preventive screenings due`,
-      icon: 'alert-circle',
-      color: 'critical',
-      sortRank: 0,
-    });
+function mapStrategyItem(
+  s: PreventiveBriefingStrategyItem,
+  index: number,
+): PreventiveBriefingItem {
+  // Kind/color/icon derived from action + priority so the home screen can
+  // keep its existing rendering branches.
+  let kind: PreventiveBriefingKind;
+  let icon: string;
+  let color: PreventiveBriefingItem['color'];
+
+  if (s.actionType === 'discuss_at_visit') {
+    kind = 'appointment_prep';
+    icon = 'clipboard-outline';
+    color = s.priority === 'high' ? 'info' : 'info';
+  } else if (s.actionType === 'get_at_pharmacy') {
+    kind = 'pharmacy';
+    icon = 'medkit-outline';
+    color = 'warning';
+  } else if (s.id.startsWith('progress_')) {
+    kind = 'progress';
+    icon = 'ribbon-outline';
+    color = 'success';
+  } else if (s.id.startsWith('standalone_')) {
+    // Needs-review / standalone due — warning/critical based on priority.
+    kind = 'due_single';
+    icon = s.priority === 'high' ? 'alert-circle' : 'time-outline';
+    color = s.priority === 'high' ? 'critical' : 'warning';
+  } else {
+    kind = 'due_single';
+    icon = 'alert-circle';
+    color = 'warning';
   }
 
-  // b) Due soon — only surface when no `due` items to avoid flooding
-  if (due.length === 0) {
-    const dueSoon = rows.filter((r) => r.status === 'due_soon');
-    if (dueSoon.length > 0) {
-      const r = dueSoon[0];
-      items.push({
-        key: `duesoon:${r.id}`,
-        kind: 'due_soon_single',
-        itemId: r.id,
-        message: `${getRuleTitle(r.rule)} is coming up`,
-        icon: 'time-outline',
-        color: 'warning',
-        sortRank: 1,
-      });
+  const sortRank =
+    (s.priority === 'high' ? 0 : s.priority === 'medium' ? 2 : 4) + index * 0.1;
+
+  return {
+    key: s.id,
+    kind,
+    itemId: s.itemId,
+    message: s.title,
+    icon,
+    color,
+    sortRank,
+  };
+}
+
+interface SimpleItemLike {
+  id: string;
+  status: string;
+  updated_at: string;
+  rule: { title: string };
+}
+
+function findRecentlyCompleted(
+  items: PreventiveItemWithRule[],
+): SimpleItemLike | null {
+  const now = Date.now();
+  for (const item of items) {
+    if (item.status !== 'completed' && item.status !== 'up_to_date') continue;
+    const t = new Date(item.updated_at).getTime();
+    if (now - t <= RECENT_COMPLETION_WINDOW_MS) {
+      return {
+        id: item.id,
+        status: item.status,
+        updated_at: item.updated_at,
+        rule: { title: item.rule.title },
+      };
     }
   }
-
-  // c) Needs review with missing data
-  const needsReviewWithGaps = rows.filter(
-    (r) => r.status === 'needs_review' && (r.missing_data ?? []).length > 0,
-  );
-  if (needsReviewWithGaps.length > 0) {
-    items.push({
-      key: 'needsreview:multi',
-      kind: 'needs_review_multi',
-      itemId: null,
-      message: `Complete your preventive care profile — ${needsReviewWithGaps.length} ${
-        needsReviewWithGaps.length === 1 ? 'item needs' : 'items need'
-      } info`,
-      icon: 'help-circle-outline',
-      color: 'info',
-      sortRank: 2,
-    });
-  }
-
-  // d) Recently completed — single most recent within 7-day window.
-  // The eligibility engine may flip a freshly-completed item from 'completed'
-  // to 'up_to_date' on rescan, so accept either.
-  const now = Date.now();
-  const recentlyCompleted = rows.find(
-    (r) =>
-      (r.status === 'completed' || r.status === 'up_to_date') &&
-      now - new Date(r.updated_at).getTime() <= RECENT_COMPLETION_WINDOW_MS,
-  );
-  if (recentlyCompleted) {
-    items.push({
-      key: `done:${recentlyCompleted.id}`,
-      kind: 'recently_completed',
-      itemId: recentlyCompleted.id,
-      message: `Nice work! ${getRuleTitle(recentlyCompleted.rule)} is done`,
-      icon: 'checkmark-circle',
-      color: 'success',
-      sortRank: 3,
-    });
-  }
-
-  items.sort((a, b) => {
-    if (a.sortRank !== b.sortRank) return a.sortRank - b.sortRank;
-    return a.key.localeCompare(b.key);
-  });
-
-  return { success: true, data: items.slice(0, max) };
+  return null;
 }

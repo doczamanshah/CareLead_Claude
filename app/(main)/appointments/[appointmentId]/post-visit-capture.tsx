@@ -43,6 +43,14 @@ import {
   useRecordCancelled,
   useRecordRescheduled,
 } from '@/hooks/usePostVisitCapture';
+import {
+  usePreventiveItems,
+  useMarkAsCompleted,
+  useUpdatePreventiveItem,
+} from '@/hooks/usePreventive';
+import { useAuth } from '@/hooks/useAuth';
+import { createTask } from '@/services/tasks';
+import type { PreventiveItemWithRule } from '@/lib/types/preventive';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import {
@@ -71,6 +79,7 @@ type Category =
   | 'referral'
   | 'follow_up'
   | 'documents'
+  | 'screening'
   | 'nothing';
 
 interface CategoryDef {
@@ -86,6 +95,7 @@ const CATEGORIES: CategoryDef[] = [
   { key: 'lab', label: 'Labs or tests ordered', icon: 'flask' },
   { key: 'referral', label: 'Referral to another doctor', icon: 'people' },
   { key: 'follow_up', label: 'Follow-up appointment needed', icon: 'calendar' },
+  { key: 'screening', label: 'Screening ordered or completed', icon: 'shield-checkmark' },
   { key: 'documents', label: 'Got documents to upload', icon: 'document-attach' },
   { key: 'nothing', label: 'Nothing significant changed', icon: 'checkmark-done' },
 ];
@@ -305,6 +315,9 @@ export default function PostVisitCaptureScreen() {
               selectedCategories={selectedCategories}
               providerName={apt.provider_name ?? null}
               medications={medications ?? []}
+              profileId={activeProfileId ?? ''}
+              householdId={activeProfile?.household_id ?? ''}
+              appointmentDate={apt.start_time}
               newMeds={newMeds}
               setNewMeds={setNewMeds}
               changedMeds={changedMeds}
@@ -514,6 +527,9 @@ interface Step3Props {
   selectedCategories: Set<Category>;
   providerName: string | null;
   medications: { id: string; drug_name: string; status: string }[];
+  profileId: string;
+  householdId: string;
+  appointmentDate: string;
   newMeds: CaptureNewMedication[];
   setNewMeds: (m: CaptureNewMedication[]) => void;
   changedMeds: CaptureMedicationChange[];
@@ -566,6 +582,14 @@ function Step3Capture(p: Step3Props) {
           providerName={p.providerName}
         />
       )}
+      {p.selectedCategories.has('screening') && (
+        <ScreeningCompletionSection
+          profileId={p.profileId}
+          householdId={p.householdId}
+          appointmentDate={p.appointmentDate}
+        />
+      )}
+
       {p.selectedCategories.has('documents') && (
         <Card style={styles.sectionCard}>
           <Text style={styles.sectionTitle}>Got documents to upload</Text>
@@ -601,6 +625,175 @@ function Step3Capture(p: Step3Props) {
     </View>
   );
 }
+
+// ── Screening completion section ──────────────────────────────────────────
+
+function ScreeningCompletionSection({
+  profileId,
+  householdId,
+  appointmentDate,
+}: {
+  profileId: string;
+  householdId: string;
+  appointmentDate: string;
+}) {
+  const { data: items } = usePreventiveItems(profileId);
+  const markCompleted = useMarkAsCompleted();
+  const updateItem = useUpdatePreventiveItem();
+  const { user } = useAuth();
+
+  // Only show items that are actionable at the visit. Already-up-to-date
+  // items are skipped; deferred/declined honor patient choice.
+  const candidates: PreventiveItemWithRule[] = (items ?? []).filter(
+    (i) =>
+      i.status === 'due' ||
+      i.status === 'due_soon' ||
+      i.status === 'needs_review' ||
+      i.status === 'scheduled',
+  );
+
+  const [handled, setHandled] = useState<Record<string, 'completed' | 'ordered'>>({});
+
+  async function markDoneAtVisit(item: PreventiveItemWithRule) {
+    const date = toIsoDateString(new Date(appointmentDate));
+    try {
+      await markCompleted.mutateAsync({
+        itemId: item.id,
+        profileId,
+        householdId,
+        completionDate: date,
+        source: 'user_reported',
+      });
+      setHandled((prev) => ({ ...prev, [item.id]: 'completed' }));
+    } catch (err) {
+      Alert.alert(
+        'Could not save',
+        err instanceof Error ? err.message : 'Please try again.',
+      );
+    }
+  }
+
+  async function markOrderedAtVisit(item: PreventiveItemWithRule) {
+    try {
+      await updateItem.mutateAsync({
+        itemId: item.id,
+        updates: { status: 'scheduled' },
+      });
+      await createTask(
+        {
+          profile_id: profileId,
+          title: `Complete ${item.rule.title}`,
+          description: `Ordered during your visit — schedule and complete this screening.`,
+          priority: 'medium',
+          source_type: 'preventive',
+          source_ref: item.id,
+          trigger_type: 'manual',
+        },
+        user?.id ?? '',
+      );
+      setHandled((prev) => ({ ...prev, [item.id]: 'ordered' }));
+    } catch (err) {
+      Alert.alert(
+        'Could not save',
+        err instanceof Error ? err.message : 'Please try again.',
+      );
+    }
+  }
+
+  if (candidates.length === 0) {
+    return (
+      <Card style={styles.sectionCard}>
+        <Text style={styles.sectionTitle}>Screenings</Text>
+        <Text style={styles.bodyText}>
+          No preventive screenings due right now. Nice work.
+        </Text>
+      </Card>
+    );
+  }
+
+  return (
+    <Card style={styles.sectionCard}>
+      <Text style={styles.sectionTitle}>Screening ordered or completed</Text>
+      <Text style={styles.bodyText}>
+        Check off anything the doctor handled — or ordered — at this visit.
+      </Text>
+
+      <View style={screeningStyles.list}>
+        {candidates.map((item) => {
+          const outcome = handled[item.id];
+          return (
+            <View key={item.id} style={screeningStyles.row}>
+              <View style={screeningStyles.rowText}>
+                <Text style={screeningStyles.rowTitle}>{item.rule.title}</Text>
+                {outcome && (
+                  <Text style={screeningStyles.rowOutcome}>
+                    {outcome === 'completed'
+                      ? 'Marked completed at this visit'
+                      : 'Task added — complete when scheduled'}
+                  </Text>
+                )}
+              </View>
+              {!outcome ? (
+                <View style={screeningStyles.rowActions}>
+                  <Button
+                    title="Completed"
+                    variant="outline"
+                    size="sm"
+                    onPress={() => markDoneAtVisit(item)}
+                    disabled={markCompleted.isPending}
+                  />
+                  <Button
+                    title="Ordered"
+                    variant="ghost"
+                    size="sm"
+                    onPress={() => markOrderedAtVisit(item)}
+                    disabled={updateItem.isPending}
+                  />
+                </View>
+              ) : (
+                <Ionicons
+                  name="checkmark-circle"
+                  size={22}
+                  color={COLORS.success.DEFAULT}
+                />
+              )}
+            </View>
+          );
+        })}
+      </View>
+    </Card>
+  );
+}
+
+const screeningStyles = StyleSheet.create({
+  list: {
+    marginTop: 12,
+    gap: 12,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border.light,
+  },
+  rowText: { flex: 1, gap: 2 },
+  rowTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  rowOutcome: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.success.DEFAULT,
+  },
+  rowActions: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+});
 
 // ── Inline capture sections ────────────────────────────────────────────────
 
