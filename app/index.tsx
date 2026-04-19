@@ -10,5 +10,5 @@ export default function Index() {
     return <Redirect href="/(main)/(tabs)" />;
   }
 
-  return <Redirect href="/(auth)/sign-in" />;
+  return <Redirect href="/(auth)" />;
 }

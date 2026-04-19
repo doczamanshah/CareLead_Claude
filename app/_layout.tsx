@@ -52,7 +52,10 @@ function AuthGate() {
           // Ensure user has a household (handles sign-in after email confirmation)
           const hasHousehold = await userHasHousehold(session.user.id);
           if (!hasHousehold) {
-            await bootstrapNewUser(session.user.id);
+            const metaName = session.user.user_metadata?.full_name as
+              | string
+              | undefined;
+            await bootstrapNewUser(session.user.id, metaName || undefined);
           }
 
           // Load profiles into store
@@ -78,10 +81,12 @@ function AuthGate() {
     if (isLoading) return;
 
     const inAuthGroup = segments[0] === '(auth)';
+    const onCollectName =
+      inAuthGroup && (segments as string[])[1] === 'collect-name';
 
     if (!session && !inAuthGroup) {
-      router.replace('/(auth)/sign-in');
-    } else if (session && inAuthGroup && profilesLoaded) {
+      router.replace('/(auth)');
+    } else if (session && inAuthGroup && profilesLoaded && !onCollectName) {
       router.replace('/(main)/(tabs)');
     }
   }, [session, segments, isLoading, profilesLoaded, router]);
