@@ -9,6 +9,7 @@
 import { APPOINTMENT_TEMPLATES } from '@/lib/constants/appointmentTemplates';
 import type {
   Appointment,
+  AppointmentContext,
   VisitPrep,
   VisitPrepConcern,
   VisitPrepDriver,
@@ -31,6 +32,8 @@ interface GenerateVisitPrepInput {
   >;
   facts: ProfileFact[];
   caregivers: CaregiverOption[];
+  /** Optional freeform context captured at appointment creation time. */
+  context?: AppointmentContext | null;
   /** Optional clock injection for tests; defaults to `Date.now()`. */
   now?: Date;
 }
@@ -290,25 +293,202 @@ function buildLogistics(
   };
 }
 
+function buildReasonDrivenQuestions(
+  reason: string,
+  appointmentType: Appointment['appointment_type'],
+  startPriority: number,
+): VisitPrepQuestion[] {
+  const out: VisitPrepQuestion[] = [];
+  const lower = reason.toLowerCase();
+  let priority = startPriority;
+
+  if (lower.includes('blood pressure') || lower.includes('bp')) {
+    out.push(
+      {
+        id: `qr-${priority}`,
+        text: 'Should I bring my home blood pressure readings?',
+        source: 'ai_suggested',
+        priority: priority++,
+        ai_suggested: true,
+      },
+      {
+        id: `qr-${priority}`,
+        text: 'Are there medication changes we should discuss based on my recent readings?',
+        source: 'ai_suggested',
+        priority: priority++,
+        ai_suggested: true,
+      },
+    );
+  }
+  if (lower.includes('surgery') || lower.includes('post-op') || lower.includes('post op')) {
+    out.push(
+      {
+        id: `qr-${priority}`,
+        text: 'How is my recovery progressing — am I on track?',
+        source: 'ai_suggested',
+        priority: priority++,
+        ai_suggested: true,
+      },
+      {
+        id: `qr-${priority}`,
+        text: 'When can I resume normal activities (driving, lifting, exercise)?',
+        source: 'ai_suggested',
+        priority: priority++,
+        ai_suggested: true,
+      },
+      {
+        id: `qr-${priority}`,
+        text: 'Do I need physical therapy or follow-up imaging?',
+        source: 'ai_suggested',
+        priority: priority++,
+        ai_suggested: true,
+      },
+    );
+  }
+  if (lower.includes('annual') || lower.includes('physical') || lower.includes('wellness')) {
+    out.push(
+      {
+        id: `qr-${priority}`,
+        text: 'Are my screenings (cancer, cardiovascular, diabetes) up to date?',
+        source: 'ai_suggested',
+        priority: priority++,
+        ai_suggested: true,
+      },
+      {
+        id: `qr-${priority}`,
+        text: 'Are there any new symptoms or concerns I should mention?',
+        source: 'ai_suggested',
+        priority: priority++,
+        ai_suggested: true,
+      },
+    );
+  }
+  if (appointmentType === 'labs' && !lower.includes('fasting')) {
+    out.push({
+      id: `qr-${priority}`,
+      text: 'Do I need to fast or hold any medications for this lab?',
+      source: 'ai_suggested',
+      priority: priority++,
+      ai_suggested: true,
+    });
+  }
+
+  return out;
+}
+
 /**
  * Generate a structured Visit Prep object from an appointment + profile context.
  * Returns a fresh prep object the caller can persist on the appointment.
  */
 export function generateVisitPrep(input: GenerateVisitPrepInput): VisitPrep {
-  const { appointment, facts, caregivers } = input;
+  const { appointment, facts, caregivers, context } = input;
   const now = input.now ?? new Date();
 
-  const purpose_summary =
-    appointment.purpose && appointment.purpose.trim().length > 0
+  const reason = context?.reason_for_visit?.trim() ?? '';
+
+  const purpose_summary = reason
+    ? reason
+    : appointment.purpose && appointment.purpose.trim().length > 0
       ? appointment.purpose.trim()
       : APPOINTMENT_TEMPLATES[appointment.appointment_type].default_purpose;
 
+  // Patient-voice questions come first, sourced directly from what the
+  // patient said during the freeform entry flow.
+  const patientConcerns = (context?.concerns_to_discuss ?? [])
+    .map((text) => text.trim())
+    .filter(Boolean);
+
+  const patientQuestions: VisitPrepQuestion[] = patientConcerns.map(
+    (text, idx) => ({
+      id: `qp-${idx + 1}`,
+      text,
+      source: 'patient',
+      priority: idx + 1,
+    }),
+  );
+
+  // Reason-driven AI suggestions layered on top.
+  const reasonQuestions = reason
+    ? buildReasonDrivenQuestions(
+        reason,
+        appointment.appointment_type,
+        patientQuestions.length + 1,
+      )
+    : [];
+
+  // Profile-based suggestions (existing logic) fill any remaining slots.
+  const baseQuestions = buildQuestions(appointment.appointment_type, facts);
+  const existingTexts = new Set(
+    [...patientQuestions, ...reasonQuestions].map((q) =>
+      q.text.toLowerCase().trim(),
+    ),
+  );
+  const baseFiltered = baseQuestions.filter(
+    (q) => !existingTexts.has(q.text.toLowerCase().trim()),
+  );
+
+  const combinedQuestions = [
+    ...patientQuestions,
+    ...reasonQuestions,
+    ...baseFiltered,
+  ]
+    .slice(0, Math.max(5, patientQuestions.length + 3))
+    .map((q, i) => ({ ...q, priority: i + 1 }));
+
+  // Logistics: prefer companion from context as the driver when the
+  // transportation hint indicates someone else is driving.
+  const baseLogistics = buildLogistics(appointment, facts, caregivers);
+  const transportLower = context?.transportation?.toLowerCase() ?? '';
+  const companionIsDriver =
+    !!context?.companion &&
+    (transportLower.includes('driv') ||
+      transportLower.includes('ride') ||
+      transportLower.includes('someone'));
+
+  let logistics = baseLogistics;
+  if (companionIsDriver && context?.companion) {
+    const match = caregivers.find(
+      (c) =>
+        context.companion &&
+        c.display_name.toLowerCase().includes(context.companion.toLowerCase()),
+    );
+    logistics = {
+      ...baseLogistics,
+      driver: {
+        name: context.companion,
+        user_id: match?.user_id ?? null,
+        notified: false,
+      },
+    };
+  }
+
+  // Merge context special_needs + prep_notes as additional items to bring.
+  const contextBring = [
+    ...(context?.special_needs ?? []),
+    context?.prep_notes ? context.prep_notes : '',
+  ]
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (contextBring.length > 0) {
+    logistics = {
+      ...logistics,
+      what_to_bring: Array.from(
+        new Set([...logistics.what_to_bring, ...contextBring]),
+      ),
+    };
+  }
+
   return {
     purpose_summary,
-    questions: buildQuestions(appointment.appointment_type, facts),
+    questions: combinedQuestions,
     refills_needed: buildRefillsNeeded(facts, now),
     concerns: buildConcerns(facts),
-    logistics: buildLogistics(appointment, facts, caregivers),
+    logistics,
     packet_generated: false,
+    special_needs: context?.special_needs ?? [],
+    patient_input_history: context?.freeform_input
+      ? [context.freeform_input]
+      : [],
   };
 }

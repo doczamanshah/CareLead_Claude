@@ -126,7 +126,7 @@ export default function CreateBillingCaseScreen() {
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={COLORS.primary.DEFAULT} />
-          <Text style={styles.busyText}>Creating your case...</Text>
+          <Text style={styles.busyText}>Getting things ready...</Text>
         </View>
       </SafeAreaView>
     );
@@ -140,7 +140,7 @@ export default function CreateBillingCaseScreen() {
           <Ionicons name="chevron-back" size={18} color={COLORS.primary.DEFAULT} />
           <Text style={styles.backText}>Back</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>New Billing Case</Text>
+        <Text style={styles.title}>Track a Bill</Text>
         <Text style={styles.subtitle}>
           How would you like to get started?
         </Text>
@@ -157,7 +157,7 @@ export default function CreateBillingCaseScreen() {
           </View>
           <View style={styles.optionText}>
             <Text style={styles.optionTitle}>Snap a Bill</Text>
-            <Text style={styles.optionDesc}>Take a photo and we'll handle the rest</Text>
+            <Text style={styles.optionDesc}>Take a photo and we'll tell you what you owe</Text>
           </View>
           <Ionicons name="chevron-forward" size={18} color={COLORS.text.tertiary} />
         </TouchableOpacity>

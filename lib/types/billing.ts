@@ -102,11 +102,11 @@ export interface UpdateBillingCaseInput {
 }
 
 export const BILLING_STATUS_LABELS: Record<BillingCaseStatus, string> = {
-  open: 'Open',
-  in_review: 'In Review',
-  action_plan: 'Action Plan',
+  open: 'New',
+  in_review: 'Reviewing',
+  action_plan: 'Has next steps',
   in_progress: 'In Progress',
-  resolved: 'Resolved',
+  resolved: 'Done',
   closed: 'Closed',
 };
 

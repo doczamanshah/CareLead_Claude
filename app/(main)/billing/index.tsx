@@ -13,7 +13,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/components/ui/Card';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useBillingCases } from '@/hooks/useBilling';
-import { formatRelativeTime } from '@/lib/utils/relativeTime';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { BillingCaseWithDocCount, BillingCaseStatus } from '@/lib/types/billing';
@@ -71,10 +70,10 @@ export default function BillingCasesScreen() {
             <Ionicons name="chevron-back" size={22} color={COLORS.primary.DEFAULT} />
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Bills & EOBs</Text>
+          <Text style={styles.title}>Your Bills</Text>
         </View>
         <View style={styles.centered}>
-          <Text style={styles.loadingText}>Loading billing cases...</Text>
+          <Text style={styles.loadingText}>Loading your bills...</Text>
         </View>
       </SafeAreaView>
     );
@@ -88,11 +87,11 @@ export default function BillingCasesScreen() {
             <Ionicons name="chevron-back" size={22} color={COLORS.primary.DEFAULT} />
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Bills & EOBs</Text>
+          <Text style={styles.title}>Your Bills</Text>
         </View>
         <View style={styles.centered}>
           <Ionicons name="cloud-offline-outline" size={36} color={COLORS.text.tertiary} />
-          <Text style={styles.errorText}>Couldn't load your billing cases.</Text>
+          <Text style={styles.errorText}>Couldn't load your bills.</Text>
           <TouchableOpacity style={styles.retryButton} onPress={() => refetch()}>
             <Text style={styles.retryText}>Try again</Text>
           </TouchableOpacity>
@@ -123,7 +122,7 @@ export default function BillingCasesScreen() {
             <Ionicons name="chevron-back" size={22} color={COLORS.primary.DEFAULT} />
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Bills & EOBs</Text>
+          <Text style={styles.title}>Your Bills</Text>
         </View>
 
         {/* Filter toggle */}
@@ -153,16 +152,16 @@ export default function BillingCasesScreen() {
                   color={COLORS.text.tertiary}
                   style={styles.emptyIcon}
                 />
-                <Text style={styles.emptyText}>No billing cases yet</Text>
+                <Text style={styles.emptyText}>No bills yet</Text>
                 <Text style={styles.emptySubtext}>
-                  Create a case to start tracking a bill, EOB, or insurance claim.
+                  Track your first bill to catch billing errors and stay on top of what you owe.
                 </Text>
                 <TouchableOpacity
                   style={styles.emptyCta}
                   onPress={() => router.push('/(main)/billing/create')}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.emptyCtaText}>Start a Case</Text>
+                  <Text style={styles.emptyCtaText}>Track a Bill</Text>
                 </TouchableOpacity>
               </View>
             </Card>
@@ -175,11 +174,11 @@ export default function BillingCasesScreen() {
                   color={COLORS.success.DEFAULT}
                   style={styles.emptyIcon}
                 />
-                <Text style={styles.emptyText}>No active cases</Text>
+                <Text style={styles.emptyText}>Nothing active</Text>
                 <Text style={styles.emptySubtext}>
                   {resolvedCount > 0
-                    ? `You have ${resolvedCount} resolved case${resolvedCount === 1 ? '' : 's'}. Switch to "All" to see them.`
-                    : 'Tap + below to start a new bill or EOB.'}
+                    ? `You have ${resolvedCount} resolved bill${resolvedCount === 1 ? '' : 's'}. Switch to "All" to see them.`
+                    : 'Tap + below to track a new bill.'}
                 </Text>
               </View>
             </Card>
@@ -241,59 +240,54 @@ function CaseCard({
   const statusColor = STATUS_COLORS[billingCase.status];
   const dimmed = !isActive(billingCase.status);
 
-  const serviceDates = billingCase.service_date_start
-    ? billingCase.service_date_end && billingCase.service_date_end !== billingCase.service_date_start
-      ? `${formatShortDate(billingCase.service_date_start)} - ${formatShortDate(billingCase.service_date_end)}`
-      : formatShortDate(billingCase.service_date_start)
+  const serviceDate = billingCase.service_date_start
+    ? formatShortDate(billingCase.service_date_start)
     : null;
 
-  const details = [
-    billingCase.provider_name,
-    billingCase.payer_name,
-    serviceDates,
-  ].filter(Boolean);
+  // Key number, big and clear — matches the tone of the case detail view.
+  const keyNumber = (() => {
+    if (billingCase.status === 'resolved' || billingCase.status === 'closed') {
+      return billingCase.total_paid > 0
+        ? `Resolved — Paid $${billingCase.total_paid.toFixed(2)}`
+        : 'Resolved';
+    }
+    if (billingCase.unresolved_findings_count > 0) {
+      return 'Needs attention';
+    }
+    if (billingCase.total_patient_responsibility == null) {
+      return 'Processing…';
+    }
+    const remaining =
+      billingCase.total_patient_responsibility - billingCase.total_paid;
+    if (remaining <= 0.01) {
+      return 'Paid in full';
+    }
+    return `You owe: $${remaining.toFixed(2)}`;
+  })();
 
-  const hasTotals = billingCase.total_patient_responsibility != null;
-  const paymentLine = !hasTotals
-    ? billingCase.total_paid > 0
-      ? `Paid $${billingCase.total_paid.toFixed(2)}`
-      : 'No payments yet'
-    : billingCase.total_paid > 0
-    ? `Paid $${billingCase.total_paid.toFixed(2)} of $${billingCase.total_patient_responsibility!.toFixed(2)}`
-    : `$${billingCase.total_patient_responsibility!.toFixed(2)} owed`;
+  // Subtle stage icon derived from status
+  const stageIcon = stageIconFor(billingCase);
 
   return (
     <Card style={dimmed ? { ...styles.caseCard, ...styles.caseCardDimmed } : styles.caseCard} onPress={onPress}>
       <View style={styles.caseRow}>
         <View style={styles.caseInfo}>
           <View style={styles.caseTitleRow}>
+            <Ionicons
+              name={stageIcon.name}
+              size={14}
+              color={COLORS.text.tertiary}
+            />
             <Text style={styles.caseTitle} numberOfLines={2}>
-              {billingCase.title}
+              {billingCase.provider_name ?? billingCase.title}
             </Text>
-            {billingCase.unresolved_findings_count > 0 && (
-              <View style={styles.findingsBadge}>
-                <Ionicons name="warning" size={11} color="#FFFFFF" />
-                <Text style={styles.findingsBadgeText}>
-                  {billingCase.unresolved_findings_count}
-                </Text>
-              </View>
-            )}
           </View>
-          {details.length > 0 && (
+          {serviceDate && (
             <Text style={styles.caseDetail} numberOfLines={1}>
-              {details.join(' · ')}
+              {serviceDate}
             </Text>
           )}
-          <View style={styles.caseMeta}>
-            <Text style={styles.caseAmount}>{paymentLine}</Text>
-            <Text style={styles.caseDocCount}>
-              <Ionicons name="document-text-outline" size={12} color={COLORS.text.tertiary} />
-              {' '}{billingCase.document_count} doc{billingCase.document_count !== 1 ? 's' : ''}
-            </Text>
-          </View>
-          <Text style={styles.caseUpdated}>
-            Last updated {formatRelativeTime(billingCase.last_activity_at)}
-          </Text>
+          <Text style={styles.caseAmount}>{keyNumber}</Text>
         </View>
         <View style={[styles.statusPill, { backgroundColor: statusColor + '20' }]}>
           <Text style={[styles.statusPillText, { color: statusColor }]}>
@@ -303,6 +297,19 @@ function CaseCard({
       </View>
     </Card>
   );
+}
+
+function stageIconFor(c: BillingCaseWithDocCount): { name: 'hourglass-outline' | 'search-outline' | 'list-outline' | 'checkmark-done-outline' } {
+  if (c.status === 'resolved' || c.status === 'closed') {
+    return { name: 'checkmark-done-outline' };
+  }
+  if (c.status === 'in_progress' || c.status === 'action_plan') {
+    return { name: 'list-outline' };
+  }
+  if (c.status === 'in_review') {
+    return { name: 'search-outline' };
+  }
+  return { name: 'hourglass-outline' };
 }
 
 function formatShortDate(dateStr: string): string {
@@ -451,7 +458,7 @@ const styles = StyleSheet.create({
   caseTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
   caseTitle: {
     fontSize: FONT_SIZES.base,
@@ -459,45 +466,16 @@ const styles = StyleSheet.create({
     color: COLORS.text.DEFAULT,
     flexShrink: 1,
   },
-  findingsBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: COLORS.error.DEFAULT,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 10,
-  },
-  findingsBadgeText: {
-    fontSize: 11,
-    color: '#FFFFFF',
-    fontWeight: FONT_WEIGHTS.bold,
-  },
   caseDetail: {
     fontSize: FONT_SIZES.sm,
     color: COLORS.text.secondary,
     marginTop: 2,
   },
-  caseMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 6,
-    gap: 12,
-    flexWrap: 'wrap',
-  },
   caseAmount: {
     fontSize: FONT_SIZES.sm,
     fontWeight: FONT_WEIGHTS.semibold,
     color: COLORS.text.DEFAULT,
-  },
-  caseDocCount: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.text.tertiary,
-  },
-  caseUpdated: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.text.tertiary,
-    marginTop: 4,
+    marginTop: 6,
   },
   statusPill: {
     paddingHorizontal: 10,

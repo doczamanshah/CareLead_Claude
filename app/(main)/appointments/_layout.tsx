@@ -11,6 +11,9 @@ export default function AppointmentsLayout() {
     >
       <Stack.Screen name="index" />
       <Stack.Screen name="create" />
+      <Stack.Screen name="freeform" />
+      <Stack.Screen name="review" />
+      <Stack.Screen name="manual-create" />
       <Stack.Screen name="[appointmentId]/index" />
       <Stack.Screen name="[appointmentId]/plan" />
       <Stack.Screen name="[appointmentId]/suggest" />

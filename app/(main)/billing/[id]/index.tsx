@@ -47,12 +47,18 @@ import { formatRelativeTime } from '@/lib/utils/relativeTime';
 import { useProfileDetail } from '@/hooks/useProfileDetail';
 import { useProfileEnrichment } from '@/hooks/useProfileEnrichment';
 import { ProfileEnrichmentCard } from '@/components/ProfileEnrichmentCard';
+import { SimpleBillCard } from '@/components/modules/SimpleBillCard';
 import type { TimelineEvent, TimelineEventType } from '@/services/billingTimeline';
 import { computePaymentSummary } from '@/services/billing';
 import {
   autoCompleteActions,
   autoDismissResolvedActions,
 } from '@/services/billingActionPlan';
+import {
+  determineBillingStage,
+  isSimpleBill,
+  type BillingStage,
+} from '@/services/billingStage';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type {
@@ -79,6 +85,8 @@ import {
   DENIAL_CATEGORY_LABELS,
   APPEAL_STATUS_LABELS,
 } from '@/lib/types/billing';
+
+type TabKey = 'overview' | 'details' | 'activity';
 
 const STATUS_COLORS: Record<BillingCaseStatus, string> = {
   open: COLORS.accent.dark,
@@ -315,6 +323,15 @@ export default function BillingCaseDetailScreen() {
   // Your Notes collapse
   const [notesExpanded, setNotesExpanded] = useState(false);
 
+  // "See full details" expand/collapse toggle (used on analyzed/simple and resolved stages)
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
+
+  // Tab selection for the detailed view (analyzed + in_progress stages)
+  const [activeTab, setActiveTab] = useState<TabKey>('overview');
+
+  // User override: dismiss the simple bill card to fall back to the tabbed view
+  const [forceFullView, setForceFullView] = useState(false);
+
   // Edit details modal
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editProvider, setEditProvider] = useState('');
@@ -440,6 +457,667 @@ export default function BillingCaseDetailScreen() {
   const reconciled = billingCase.last_reconciled_at !== null;
   const caseStrength = getCaseStrength(findings, reconciled);
 
+  // ── Stage detection (progressive disclosure) ──
+  const stage: BillingStage = determineBillingStage({
+    billingCase,
+    findings,
+    actions,
+    callLogs,
+    payments,
+    extractJobs: extractionJobs,
+  });
+
+  const simple = isSimpleBill({
+    billingCase,
+    findings,
+    ledgerLines,
+  });
+
+  const patientResponsibility = billingCase.total_patient_responsibility ?? 0;
+  const totalPaid = (payments ?? [])
+    .filter((p) => p.kind === 'payment')
+    .reduce((sum, p) => sum + Number(p.amount), 0);
+  const totalRefunded = (payments ?? [])
+    .filter((p) => p.kind === 'refund')
+    .reduce((sum, p) => sum + Number(p.amount), 0);
+  const netPaid = totalPaid - totalRefunded;
+
+  // Next step hint for stage 1
+  const docs = documents ?? [];
+  const hasBill = docs.some((d) => d.doc_type === 'bill' || d.doc_type === 'itemized_bill');
+  const hasEob = docs.some((d) => d.doc_type === 'eob');
+  const nextStepHint = (() => {
+    if (isExtracting) {
+      return {
+        icon: 'hourglass-outline' as const,
+        title: "We're reading your documents…",
+        detail: 'Hang tight — this usually takes a few seconds.',
+      };
+    }
+    if (docs.length === 0) {
+      return {
+        icon: 'document-attach-outline' as const,
+        title: 'Upload your bill or EOB',
+        detail: 'Take a photo or pick a file to get started.',
+      };
+    }
+    if (hasBill && !hasEob) {
+      return {
+        icon: 'shield-checkmark-outline' as const,
+        title: 'Upload your EOB to check for errors',
+        detail: 'An EOB from your insurance helps us verify you were billed correctly.',
+      };
+    }
+    if (!hasBill && hasEob) {
+      return {
+        icon: 'receipt-outline' as const,
+        title: 'Upload the matching bill',
+        detail: 'We can compare it to your EOB to catch any overbilling.',
+      };
+    }
+    return null;
+  })();
+
+  // What tabs to show based on data
+  const hasActivity =
+    (callLogs ?? []).length > 0 ||
+    (payments ?? []).length > 0 ||
+    (timelineEvents ?? []).length > 0;
+  const hasDetailsContent =
+    (ledgerLines ?? []).filter((l) => l.line_kind !== 'total').length > 0 ||
+    (denialRecords ?? []).length > 0 ||
+    docs.length > 0;
+
+  const tabs: { key: TabKey; label: string }[] = [
+    { key: 'overview', label: 'Overview' },
+  ];
+  if (hasDetailsContent) tabs.push({ key: 'details', label: 'Details' });
+  if (hasActivity) tabs.push({ key: 'activity', label: 'Activity' });
+
+  const effectiveTab: TabKey = tabs.find((t) => t.key === activeTab)?.key ?? 'overview';
+
+  // ── Shared section renderers ───────────────────────────────────────────
+  const renderSummaryDetailsCard = () => (
+    <View style={styles.sectionPadded}>
+      <View style={styles.sectionHeaderRow}>
+        <Text style={styles.sectionLabel}>DETAILS</Text>
+        <TouchableOpacity onPress={openEditModal} activeOpacity={0.7}>
+          <View style={styles.editButton}>
+            <Ionicons name="pencil-outline" size={14} color={COLORS.primary.DEFAULT} />
+            <Text style={styles.editButtonText}>Edit</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+      <Card>
+        {billingCase.provider_name && (
+          <DetailRow label="Provider" value={billingCase.provider_name} />
+        )}
+        {billingCase.payer_name && (
+          <DetailRow label="Payer" value={billingCase.payer_name} />
+        )}
+        {billingCase.service_date_start && (
+          <DetailRow
+            label="Service Date"
+            value={
+              billingCase.service_date_end && billingCase.service_date_end !== billingCase.service_date_start
+                ? `${formatDate(billingCase.service_date_start)} - ${formatDate(billingCase.service_date_end)}`
+                : formatDate(billingCase.service_date_start)
+            }
+          />
+        )}
+        {billingCase.notes && <DetailRow label="Notes" value={billingCase.notes} />}
+        {!billingCase.provider_name && !billingCase.payer_name && !billingCase.service_date_start && !billingCase.notes && (
+          <TouchableOpacity onPress={openEditModal} activeOpacity={0.7}>
+            <Text style={styles.noDetailsText}>No details added yet — tap to add</Text>
+          </TouchableOpacity>
+        )}
+      </Card>
+    </View>
+  );
+
+  const renderYourNotes = () => {
+    if (!billingCase.freeform_input) return null;
+    return (
+      <View style={styles.sectionPadded}>
+        <TouchableOpacity onPress={() => setNotesExpanded(!notesExpanded)} activeOpacity={0.7}>
+          <View style={styles.notesHeaderRow}>
+            <Text style={styles.sectionLabel}>YOUR NOTES</Text>
+            <Ionicons
+              name={notesExpanded ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={COLORS.text.tertiary}
+            />
+          </View>
+        </TouchableOpacity>
+        <Card>
+          <Text
+            style={notesExpanded ? styles.freeformDisplay : styles.freeformPreview}
+            numberOfLines={notesExpanded ? undefined : 2}
+          >
+            {billingCase.freeform_input}
+          </Text>
+        </Card>
+      </View>
+    );
+  };
+
+  const renderAddDetails = () => (
+    <View style={styles.sectionPadded}>
+      <View style={styles.addDetailsHeader}>
+        <Ionicons name="mic-outline" size={16} color={COLORS.text.secondary} />
+        <Text style={styles.addDetailsLabel}>Add Details</Text>
+      </View>
+      <View style={styles.addDetailsContainer}>
+        <TextInput
+          style={styles.addDetailsInput}
+          placeholder="Type or dictate additional details about this bill..."
+          placeholderTextColor={COLORS.text.tertiary}
+          value={addDetailsText}
+          onChangeText={setAddDetailsText}
+          multiline
+          textAlignVertical="top"
+        />
+        <View style={styles.addDetailsFooter}>
+          {detailsSaved && (
+            <View style={styles.savedBadge}>
+              <Ionicons name="checkmark-circle" size={14} color={COLORS.success.DEFAULT} />
+              <Text style={styles.savedText}>Saved</Text>
+            </View>
+          )}
+          <View style={styles.addDetailsSpacer} />
+          <TouchableOpacity
+            onPress={handleSaveDetails}
+            disabled={!addDetailsText.trim() || updateCase.isPending}
+            style={[styles.saveDetailsButton, !addDetailsText.trim() && styles.saveDetailsButtonDisabled]}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.saveDetailsText, !addDetailsText.trim() && styles.saveDetailsTextDisabled]}>
+              Save
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+
+  const renderDocuments = () => (
+    <View style={styles.sectionPadded}>
+      <View style={styles.sectionHeaderRow}>
+        <Text style={styles.sectionLabel}>DOCUMENTS</Text>
+        <TouchableOpacity
+          onPress={() => router.push(`/(main)/billing/${billingCase.id}/add-document`)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.addDocButton}>
+            <Ionicons name="add" size={16} color={COLORS.primary.DEFAULT} />
+            <Text style={styles.addDocText}>Add</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+      {docs.length === 0 ? (
+        <Card>
+          <View style={styles.emptyDocsContainer}>
+            <Ionicons name="document-attach-outline" size={32} color={COLORS.text.tertiary} />
+            <Text style={styles.emptyDocsText}>No documents yet</Text>
+            <Text style={styles.emptyDocsSubtext}>Upload a bill or EOB to get started</Text>
+          </View>
+        </Card>
+      ) : (
+        docs.map((doc) => (
+          <DocumentCard key={doc.id} document={doc} onDelete={() => handleDeleteDocument(doc)} />
+        ))
+      )}
+    </View>
+  );
+
+  const renderTotalsCard = () => (
+    <View style={styles.sectionPadded}>
+      <Text style={styles.sectionLabel}>TOTALS</Text>
+      <Card>
+        {hasTotals ? (
+          <>
+            {billingCase.total_billed != null && (
+              <TotalRow label="Billed" amount={billingCase.total_billed} confidence={billingCase.totals_confidence} />
+            )}
+            {billingCase.total_allowed != null && (
+              <TotalRow label="Allowed" amount={billingCase.total_allowed} confidence={billingCase.totals_confidence} />
+            )}
+            {billingCase.total_plan_paid != null && (
+              <TotalRow label="Plan Paid" amount={billingCase.total_plan_paid} confidence={billingCase.totals_confidence} />
+            )}
+            {billingCase.total_patient_responsibility != null && (
+              <TotalRow
+                label="You Owe"
+                amount={billingCase.total_patient_responsibility}
+                confidence={billingCase.totals_confidence}
+                bold
+              />
+            )}
+          </>
+        ) : (
+          <View style={styles.pendingContainer}>
+            <Ionicons name="receipt-outline" size={20} color={COLORS.text.tertiary} />
+            <Text style={styles.pendingText}>No totals yet</Text>
+          </View>
+        )}
+      </Card>
+    </View>
+  );
+
+  const renderExtractionStatusBanner = () => {
+    if (!lastJobFailed) return null;
+    return (
+      <View style={styles.sectionPadded}>
+        <Card style={styles.extractionWarningCard}>
+          <View style={styles.extractionStatusRow}>
+            <Ionicons name="warning-outline" size={18} color={COLORS.warning.DEFAULT} />
+            <Text style={styles.extractionWarningText}>
+              We couldn't read this clearly. You can try a better photo or add details manually.
+            </Text>
+          </View>
+          {lastJob?.billing_document_id && billingCase && (
+            <TouchableOpacity
+              style={styles.retryButton}
+              activeOpacity={0.7}
+              onPress={() => {
+                retryExtraction.mutate({
+                  documentId: lastJob.billing_document_id!,
+                  caseId: billingCase.id,
+                  profileId: billingCase.profile_id,
+                  householdId: billingCase.household_id,
+                });
+              }}
+            >
+              <Text style={styles.retryButtonText}>Retry</Text>
+            </TouchableOpacity>
+          )}
+        </Card>
+      </View>
+    );
+  };
+
+  const renderFindings = () => (
+    <FindingsSection
+      findings={findings ?? []}
+      reconciled={reconciled}
+      extractionCompleted={extractionCompleted}
+      isReconciling={isReconciling}
+      onRefresh={() => reconcile()}
+      hasActionPlan={(actions ?? []).length > 0}
+      onSeeActionPlan={scrollToActionPlan}
+    />
+  );
+
+  const renderActionPlan = () => (
+    <View
+      onLayout={(e) => {
+        actionPlanY.current = e.nativeEvent.layout.y;
+      }}
+    >
+      <ActionPlanSection
+        actions={actions ?? []}
+        findings={findings ?? []}
+        selectedIds={selectedActionIds}
+        onToggleSelect={(actionId) => {
+          setSelectedActionIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(actionId)) {
+              next.delete(actionId);
+            } else {
+              next.add(actionId);
+            }
+            return next;
+          });
+        }}
+        onDismiss={(actionId) => {
+          dismissActionMutation.mutate(actionId);
+          setSelectedActionIds((prev) => {
+            const next = new Set(prev);
+            next.delete(actionId);
+            return next;
+          });
+        }}
+        onActivate={() => {
+          if (!billingCase) return;
+          const toActivate = (actions ?? []).filter(
+            (a) => a.status === 'proposed' && selectedActionIds.has(a.id),
+          );
+          if (toActivate.length === 0) return;
+          activateActionsMutation.mutate(
+            {
+              actions: toActivate,
+              caseId: billingCase.id,
+              profileId: billingCase.profile_id,
+              householdId: billingCase.household_id,
+            },
+            {
+              onSuccess: (result) => {
+                setSelectedActionIds(new Set());
+                const count = result.updated.length;
+                setActivationConfirmation(
+                  `${count} task${count === 1 ? '' : 's'} created. Track them in your Tasks.`,
+                );
+                setTimeout(() => setActivationConfirmation(null), 3500);
+              },
+            },
+          );
+        }}
+        isActivating={activateActionsMutation.isPending}
+        onMarkDone={(actionId) => {
+          updateActionMutation.mutate({ actionId, status: 'done' });
+        }}
+        onViewTask={(taskId) => {
+          router.push(`/(main)/tasks/${taskId}`);
+        }}
+        activationConfirmation={activationConfirmation}
+      />
+    </View>
+  );
+
+  const renderCalls = () => (
+    <CallsSection
+      callLogs={callLogs ?? []}
+      onNewCall={() => router.push(`/(main)/billing/${id}/call-helper`)}
+    />
+  );
+
+  const renderPayments = () => (
+    <PaymentsSection
+      payments={payments ?? []}
+      patientResponsibility={billingCase.total_patient_responsibility}
+      onCreate={(input, onDone) =>
+        createPaymentMutation.mutate(
+          {
+            caseId: billingCase.id,
+            profileId: billingCase.profile_id,
+            householdId: billingCase.household_id,
+            ...input,
+          },
+          { onSuccess: () => onDone?.() },
+        )
+      }
+      isCreating={createPaymentMutation.isPending}
+      onDelete={(paymentId) => deletePaymentMutation.mutate(paymentId)}
+    />
+  );
+
+  const renderTimeline = () => <TimelineSection events={timelineEvents ?? []} />;
+
+  const renderResolveButton = () => (
+    <ResolveCaseSection
+      status={billingCase.status}
+      onResolve={() => {
+        Alert.alert(
+          'Mark this bill done?',
+          'You can reopen it later if needed.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Mark Done',
+              onPress: () => {
+                updateCase.mutate({
+                  caseId: billingCase.id,
+                  updates: { status: 'resolved' },
+                });
+              },
+            },
+          ],
+        );
+      }}
+      onReopen={() => {
+        updateCase.mutate({
+          caseId: billingCase.id,
+          updates: { status: 'open' },
+        });
+      }}
+      isPending={updateCase.isPending}
+    />
+  );
+
+  const renderEnrichment = () => {
+    if (enrichment.suggestions.length === 0) return null;
+    return (
+      <ProfileEnrichmentCard
+        suggestions={enrichment.suggestions}
+        sourceLabel={billingSourceLabel}
+        onAccept={enrichment.onAccept}
+        onDismiss={enrichment.onDismiss}
+        onDismissAll={enrichment.onDismissAll}
+      />
+    );
+  };
+
+  const renderTabBar = () => {
+    if (tabs.length <= 1) return null;
+    return (
+      <View style={styles.tabBar}>
+        {tabs.map((t) => {
+          const selected = t.key === effectiveTab;
+          return (
+            <TouchableOpacity
+              key={t.key}
+              onPress={() => setActiveTab(t.key)}
+              style={styles.tabItem}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.tabLabel, selected && styles.tabLabelActive]}>
+                {t.label}
+              </Text>
+              <View style={[styles.tabUnderline, selected && styles.tabUnderlineActive]} />
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
+  };
+
+  // ── Stage renderers ────────────────────────────────────────────────────
+  const renderJustStarted = () => {
+    const readingDocs = isExtracting;
+    return (
+      <>
+        <View style={styles.sectionPadded}>
+          <CaseStrengthCard strength={caseStrength} />
+        </View>
+        {renderSummaryDetailsCard()}
+        {renderYourNotes()}
+        {readingDocs ? (
+          <View style={styles.sectionPadded}>
+            <Card style={styles.extractionStatusCard}>
+              <View style={styles.extractionStatusRow}>
+                <ActivityIndicator size="small" color={COLORS.primary.DEFAULT} />
+                <Text style={styles.extractionStatusText}>
+                  Reading your bill…
+                </Text>
+              </View>
+            </Card>
+          </View>
+        ) : null}
+        {renderExtractionStatusBanner()}
+        {nextStepHint && !readingDocs && (
+          <View style={styles.sectionPadded}>
+            <View style={styles.nextStepCard}>
+              <View style={styles.nextStepIconWrap}>
+                <Ionicons name={nextStepHint.icon} size={22} color={COLORS.primary.DEFAULT} />
+              </View>
+              <View style={styles.nextStepContent}>
+                <Text style={styles.nextStepTitle}>{nextStepHint.title}</Text>
+                <Text style={styles.nextStepDetail}>{nextStepHint.detail}</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => router.push(`/(main)/billing/${billingCase.id}/add-document`)}
+                activeOpacity={0.8}
+                style={styles.nextStepButton}
+              >
+                <Text style={styles.nextStepButtonText}>Add</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+        {renderDocuments()}
+        {renderAddDetails()}
+        {renderResolveButton()}
+      </>
+    );
+  };
+
+  const renderOverviewTab = () => (
+    <>
+      {renderEnrichment()}
+      {renderFindings()}
+      {renderActionPlan()}
+      {renderSummaryDetailsCard()}
+      {renderYourNotes()}
+    </>
+  );
+
+  const renderDetailsTab = () => (
+    <>
+      <LineItemsSection ledgerLines={ledgerLines ?? []} />
+      {renderDocuments()}
+      <DenialsAppealsSection
+        denialRecords={denialRecords ?? []}
+        appealPackets={appealPackets ?? []}
+        onManage={() => router.push(`/(main)/billing/${billingCase.id}/appeals`)}
+      />
+      {renderAddDetails()}
+    </>
+  );
+
+  const renderActivityTab = () => (
+    <>
+      {renderCalls()}
+      {renderPayments()}
+      {renderTimeline()}
+    </>
+  );
+
+  const renderTabContent = () => {
+    if (effectiveTab === 'details') return renderDetailsTab();
+    if (effectiveTab === 'activity') return renderActivityTab();
+    return renderOverviewTab();
+  };
+
+  const renderAnalyzed = () => {
+    // Simple-bill path: highlight SimpleBillCard, everything else collapsed
+    if (simple && !forceFullView) {
+      return (
+        <>
+          <View style={styles.sectionPadded}>
+            <SimpleBillCard
+              providerName={billingCase.provider_name}
+              serviceDate={billingCase.service_date_start}
+              patientResponsibility={patientResponsibility}
+              onRecordPayment={() => {
+                setForceFullView(true);
+                setActiveTab('activity');
+              }}
+              onSomethingWrong={() => setForceFullView(true)}
+              onSaveForLater={() => router.back()}
+            />
+          </View>
+          {renderEnrichment()}
+          <CollapsibleSection
+            label="See full details"
+            expanded={detailsExpanded}
+            onToggle={() => setDetailsExpanded((v) => !v)}
+          />
+          {detailsExpanded && (
+            <>
+              {renderTabBar()}
+              {renderTabContent()}
+              {renderResolveButton()}
+            </>
+          )}
+        </>
+      );
+    }
+
+    // Brief-summary path for complex bills
+    const topFinding = (findings ?? []).find((f) => f.severity === 'critical') ?? (findings ?? [])[0];
+    return (
+      <>
+        <View style={styles.sectionPadded}>
+          <View style={styles.briefSummaryCard}>
+            <Text style={styles.briefSummaryEyebrow}>We found some things to look at</Text>
+            {patientResponsibility > 0 && (
+              <>
+                <Text style={styles.briefSummaryAmountLabel}>You owe</Text>
+                <Text style={styles.briefSummaryAmount}>
+                  ${patientResponsibility.toFixed(2)}
+                </Text>
+              </>
+            )}
+            {topFinding && (
+              <View style={styles.briefSummaryFindingRow}>
+                <Ionicons
+                  name={
+                    topFinding.severity === 'critical'
+                      ? 'alert-circle'
+                      : 'warning-outline'
+                  }
+                  size={18}
+                  color={
+                    topFinding.severity === 'critical'
+                      ? COLORS.error.DEFAULT
+                      : COLORS.warning.DEFAULT
+                  }
+                />
+                <Text style={styles.briefSummaryFindingText}>{topFinding.message}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+        {renderTabBar()}
+        {renderTabContent()}
+        {renderResolveButton()}
+      </>
+    );
+  };
+
+  const renderInProgress = () => (
+    <>
+      {renderTotalsCard()}
+      {renderEnrichment()}
+      {renderTabBar()}
+      {renderTabContent()}
+      {renderResolveButton()}
+    </>
+  );
+
+  const renderResolved = () => (
+    <>
+      <View style={styles.sectionPadded}>
+        <View style={styles.resolutionCard}>
+          <Ionicons name="checkmark-circle" size={28} color={COLORS.success.DEFAULT} />
+          <Text style={styles.resolutionTitle}>Bill resolved</Text>
+          {totalPaid > 0 && (
+            <Text style={styles.resolutionDetail}>
+              Total paid: ${netPaid.toFixed(2)}
+            </Text>
+          )}
+        </View>
+      </View>
+      {renderTimeline()}
+      <CollapsibleSection
+        label="See full details"
+        expanded={detailsExpanded}
+        onToggle={() => setDetailsExpanded((v) => !v)}
+      />
+      {detailsExpanded && (
+        <>
+          {renderTotalsCard()}
+          {renderSummaryDetailsCard()}
+          <LineItemsSection ledgerLines={ledgerLines ?? []} />
+          {renderDocuments()}
+          {renderCalls()}
+          {renderPayments()}
+        </>
+      )}
+      {renderResolveButton()}
+    </>
+  );
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <KeyboardAvoidingView
@@ -462,7 +1140,6 @@ export default function BillingCaseDetailScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Editable title */}
           <View style={styles.titleRow}>
             {editingTitle ? (
               <TextInput
@@ -489,390 +1166,10 @@ export default function BillingCaseDetailScreen() {
           </View>
         </View>
 
-        {/* Case Strength */}
-        <View style={styles.sectionPadded}>
-          <CaseStrengthCard strength={caseStrength} />
-        </View>
-
-        {/* Details */}
-        <View style={styles.sectionPadded}>
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionLabel}>DETAILS</Text>
-            <TouchableOpacity onPress={openEditModal} activeOpacity={0.7}>
-              <View style={styles.editButton}>
-                <Ionicons name="pencil-outline" size={14} color={COLORS.primary.DEFAULT} />
-                <Text style={styles.editButtonText}>Edit</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-          <Card>
-            {billingCase.provider_name && (
-              <DetailRow label="Provider" value={billingCase.provider_name} />
-            )}
-            {billingCase.payer_name && (
-              <DetailRow label="Payer" value={billingCase.payer_name} />
-            )}
-            {billingCase.service_date_start && (
-              <DetailRow
-                label="Service Date"
-                value={
-                  billingCase.service_date_end && billingCase.service_date_end !== billingCase.service_date_start
-                    ? `${formatDate(billingCase.service_date_start)} - ${formatDate(billingCase.service_date_end)}`
-                    : formatDate(billingCase.service_date_start)
-                }
-              />
-            )}
-            {billingCase.notes && (
-              <DetailRow label="Notes" value={billingCase.notes} />
-            )}
-            {!billingCase.provider_name && !billingCase.payer_name && !billingCase.service_date_start && !billingCase.notes && (
-              <TouchableOpacity onPress={openEditModal} activeOpacity={0.7}>
-                <Text style={styles.noDetailsText}>No details added yet — tap to add</Text>
-              </TouchableOpacity>
-            )}
-          </Card>
-        </View>
-
-        {/* Your Notes (freeform_input display) */}
-        {billingCase.freeform_input ? (
-          <View style={styles.sectionPadded}>
-            <TouchableOpacity
-              onPress={() => setNotesExpanded(!notesExpanded)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.notesHeaderRow}>
-                <Text style={styles.sectionLabel}>YOUR NOTES</Text>
-                <Ionicons
-                  name={notesExpanded ? 'chevron-up' : 'chevron-down'}
-                  size={16}
-                  color={COLORS.text.tertiary}
-                />
-              </View>
-            </TouchableOpacity>
-            {notesExpanded && (
-              <Card>
-                <Text style={styles.freeformDisplay}>{billingCase.freeform_input}</Text>
-              </Card>
-            )}
-            {!notesExpanded && (
-              <Card>
-                <Text style={styles.freeformPreview} numberOfLines={2}>
-                  {billingCase.freeform_input}
-                </Text>
-              </Card>
-            )}
-          </View>
-        ) : null}
-
-        {/* Add Details section */}
-        <View style={styles.sectionPadded}>
-          <View style={styles.addDetailsHeader}>
-            <Ionicons name="mic-outline" size={16} color={COLORS.text.secondary} />
-            <Text style={styles.addDetailsLabel}>Add Details</Text>
-          </View>
-          <View style={styles.addDetailsContainer}>
-            <TextInput
-              style={styles.addDetailsInput}
-              placeholder="Type or dictate additional details about this bill..."
-              placeholderTextColor={COLORS.text.tertiary}
-              value={addDetailsText}
-              onChangeText={setAddDetailsText}
-              multiline
-              textAlignVertical="top"
-            />
-            <View style={styles.addDetailsFooter}>
-              {detailsSaved && (
-                <View style={styles.savedBadge}>
-                  <Ionicons name="checkmark-circle" size={14} color={COLORS.success.DEFAULT} />
-                  <Text style={styles.savedText}>Saved</Text>
-                </View>
-              )}
-              <View style={styles.addDetailsSpacer} />
-              <TouchableOpacity
-                onPress={handleSaveDetails}
-                disabled={!addDetailsText.trim() || updateCase.isPending}
-                style={[styles.saveDetailsButton, !addDetailsText.trim() && styles.saveDetailsButtonDisabled]}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.saveDetailsText, !addDetailsText.trim() && styles.saveDetailsTextDisabled]}>
-                  Save
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-
-        {/* Extraction Status */}
-        {isExtracting && (
-          <View style={styles.sectionPadded}>
-            <Card style={styles.extractionStatusCard}>
-              <View style={styles.extractionStatusRow}>
-                <ActivityIndicator size="small" color={COLORS.primary.DEFAULT} />
-                <Text style={styles.extractionStatusText}>Extracting billing details...</Text>
-              </View>
-            </Card>
-          </View>
-        )}
-        {lastJobFailed && (
-          <View style={styles.sectionPadded}>
-            <Card style={styles.extractionWarningCard}>
-              <View style={styles.extractionStatusRow}>
-                <Ionicons name="warning-outline" size={18} color={COLORS.warning.DEFAULT} />
-                <Text style={styles.extractionWarningText}>
-                  Extraction encountered an issue. You can add details manually.
-                </Text>
-              </View>
-              {lastJob?.billing_document_id && billingCase && (
-                <TouchableOpacity
-                  style={styles.retryButton}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    retryExtraction.mutate({
-                      documentId: lastJob.billing_document_id!,
-                      caseId: billingCase.id,
-                      profileId: billingCase.profile_id,
-                      householdId: billingCase.household_id,
-                    });
-                  }}
-                >
-                  <Text style={styles.retryButtonText}>Retry</Text>
-                </TouchableOpacity>
-              )}
-            </Card>
-          </View>
-        )}
-
-        {/* Totals */}
-        <View style={styles.sectionPadded}>
-          <Text style={styles.sectionLabel}>TOTALS</Text>
-          <Card>
-            {hasTotals ? (
-              <>
-                {billingCase.total_billed != null && (
-                  <TotalRow label="Billed" amount={billingCase.total_billed} confidence={billingCase.totals_confidence} />
-                )}
-                {billingCase.total_allowed != null && (
-                  <TotalRow label="Allowed" amount={billingCase.total_allowed} confidence={billingCase.totals_confidence} />
-                )}
-                {billingCase.total_plan_paid != null && (
-                  <TotalRow label="Plan Paid" amount={billingCase.total_plan_paid} confidence={billingCase.totals_confidence} />
-                )}
-                {billingCase.total_patient_responsibility != null && (
-                  <TotalRow
-                    label="Your Responsibility"
-                    amount={billingCase.total_patient_responsibility}
-                    confidence={billingCase.totals_confidence}
-                    bold
-                  />
-                )}
-              </>
-            ) : (
-              <View style={styles.pendingContainer}>
-                {isExtracting ? (
-                  <>
-                    <ActivityIndicator size="small" color={COLORS.text.tertiary} />
-                    <Text style={styles.pendingText}>Extracting totals...</Text>
-                  </>
-                ) : (
-                  <>
-                    <Ionicons name="receipt-outline" size={20} color={COLORS.text.tertiary} />
-                    <Text style={styles.pendingText}>
-                      No billing totals yet — upload a document or describe your bill to extract details
-                    </Text>
-                  </>
-                )}
-              </View>
-            )}
-          </Card>
-        </View>
-
-        {/* Line Items */}
-        <LineItemsSection ledgerLines={ledgerLines ?? []} />
-
-        {/* Documents */}
-        <View style={styles.sectionPadded}>
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionLabel}>DOCUMENTS</Text>
-            <TouchableOpacity
-              onPress={() => router.push(`/(main)/billing/${billingCase.id}/add-document`)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.addDocButton}>
-                <Ionicons name="add" size={16} color={COLORS.primary.DEFAULT} />
-                <Text style={styles.addDocText}>Add</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-          {(documents ?? []).length === 0 ? (
-            <Card>
-              <View style={styles.emptyDocsContainer}>
-                <Ionicons name="document-attach-outline" size={32} color={COLORS.text.tertiary} />
-                <Text style={styles.emptyDocsText}>No documents yet</Text>
-                <Text style={styles.emptyDocsSubtext}>
-                  Upload a bill or EOB to get started
-                </Text>
-              </View>
-            </Card>
-          ) : (
-            (documents ?? []).map((doc) => (
-              <DocumentCard
-                key={doc.id}
-                document={doc}
-                onDelete={() => handleDeleteDocument(doc)}
-              />
-            ))
-          )}
-        </View>
-
-        {/* Profile updates discovered in this case (cross-document enrichment) */}
-        {enrichment.suggestions.length > 0 && (
-          <ProfileEnrichmentCard
-            suggestions={enrichment.suggestions}
-            sourceLabel={billingSourceLabel}
-            onAccept={enrichment.onAccept}
-            onDismiss={enrichment.onDismiss}
-            onDismissAll={enrichment.onDismissAll}
-          />
-        )}
-
-        {/* What We Found (findings) */}
-        <FindingsSection
-          findings={findings ?? []}
-          reconciled={reconciled}
-          extractionCompleted={extractionCompleted}
-          isReconciling={isReconciling}
-          onRefresh={() => reconcile()}
-          hasActionPlan={(actions ?? []).length > 0}
-          onSeeActionPlan={scrollToActionPlan}
-        />
-
-        {/* Your Action Plan */}
-        <View
-          onLayout={(e) => {
-            actionPlanY.current = e.nativeEvent.layout.y;
-          }}
-        >
-          <ActionPlanSection
-            actions={actions ?? []}
-            findings={findings ?? []}
-            selectedIds={selectedActionIds}
-            onToggleSelect={(actionId) => {
-              setSelectedActionIds((prev) => {
-                const next = new Set(prev);
-                if (next.has(actionId)) {
-                  next.delete(actionId);
-                } else {
-                  next.add(actionId);
-                }
-                return next;
-              });
-            }}
-            onDismiss={(actionId) => {
-              dismissActionMutation.mutate(actionId);
-              setSelectedActionIds((prev) => {
-                const next = new Set(prev);
-                next.delete(actionId);
-                return next;
-              });
-            }}
-            onActivate={() => {
-              if (!billingCase) return;
-              const toActivate = (actions ?? []).filter(
-                (a) => a.status === 'proposed' && selectedActionIds.has(a.id),
-              );
-              if (toActivate.length === 0) return;
-              activateActionsMutation.mutate(
-                {
-                  actions: toActivate,
-                  caseId: billingCase.id,
-                  profileId: billingCase.profile_id,
-                  householdId: billingCase.household_id,
-                },
-                {
-                  onSuccess: (result) => {
-                    setSelectedActionIds(new Set());
-                    const count = result.updated.length;
-                    setActivationConfirmation(
-                      `${count} task${count === 1 ? '' : 's'} created. Track them in your Tasks.`,
-                    );
-                    setTimeout(() => setActivationConfirmation(null), 3500);
-                  },
-                },
-              );
-            }}
-            isActivating={activateActionsMutation.isPending}
-            onMarkDone={(actionId) => {
-              updateActionMutation.mutate({ actionId, status: 'done' });
-            }}
-            onViewTask={(taskId) => {
-              router.push(`/(main)/tasks/${taskId}`);
-            }}
-            activationConfirmation={activationConfirmation}
-          />
-        </View>
-
-        {/* Denials & Appeals */}
-        <DenialsAppealsSection
-          denialRecords={denialRecords ?? []}
-          appealPackets={appealPackets ?? []}
-          onManage={() => router.push(`/(main)/billing/${billingCase.id}/appeals`)}
-        />
-
-        <CallsSection
-          callLogs={callLogs ?? []}
-          onNewCall={() => router.push(`/(main)/billing/${id}/call-helper`)}
-        />
-
-        <PaymentsSection
-          payments={payments ?? []}
-          patientResponsibility={billingCase.total_patient_responsibility}
-          onCreate={(input, onDone) =>
-            createPaymentMutation.mutate(
-              {
-                caseId: billingCase.id,
-                profileId: billingCase.profile_id,
-                householdId: billingCase.household_id,
-                ...input,
-              },
-              { onSuccess: () => onDone?.() },
-            )
-          }
-          isCreating={createPaymentMutation.isPending}
-          onDelete={(paymentId) => deletePaymentMutation.mutate(paymentId)}
-        />
-
-        {/* Timeline */}
-        <TimelineSection events={timelineEvents ?? []} />
-
-        {/* Resolve / Reopen */}
-        <ResolveCaseSection
-          status={billingCase.status}
-          onResolve={() => {
-            Alert.alert(
-              'Resolve Case',
-              'Mark this case as resolved? You can reopen it later.',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Resolve',
-                  onPress: () => {
-                    updateCase.mutate({
-                      caseId: billingCase.id,
-                      updates: { status: 'resolved' },
-                    });
-                  },
-                },
-              ],
-            );
-          }}
-          onReopen={() => {
-            updateCase.mutate({
-              caseId: billingCase.id,
-              updates: { status: 'open' },
-            });
-          }}
-          isPending={updateCase.isPending}
-        />
+        {stage === 'just_started' && renderJustStarted()}
+        {stage === 'analyzed' && renderAnalyzed()}
+        {stage === 'in_progress' && renderInProgress()}
+        {stage === 'resolved' && renderResolved()}
 
         <View style={styles.bottomSpacer} />
       </ScrollView>
@@ -1016,7 +1313,7 @@ function CaseStrengthCard({ strength }: { strength: CaseStrengthInfo }) {
   return (
     <Card style={styles.completenessCard}>
       <View style={styles.strengthHeaderRow}>
-        <Text style={styles.completenessTitle}>Case strength</Text>
+        <Text style={styles.completenessTitle}>How complete is this bill?</Text>
         <View style={[styles.strengthChip, { backgroundColor: color + '1A' }]}>
           <Text style={[styles.strengthChipText, { color }]}>{label}</Text>
         </View>
@@ -1225,7 +1522,7 @@ function ActionPlanSection({
   if (actions.length === 0) {
     return (
       <View style={styles.sectionPadded}>
-        <Text style={styles.sectionLabel}>YOUR ACTION PLAN</Text>
+        <Text style={styles.sectionLabel}>WHAT TO DO</Text>
         <Card>
           <View style={styles.actionPlanEmptyRow}>
             <Ionicons name="checkmark-circle-outline" size={20} color={COLORS.text.tertiary} />
@@ -1247,7 +1544,7 @@ function ActionPlanSection({
 
   return (
     <View style={styles.sectionPadded}>
-      <Text style={styles.sectionLabel}>YOUR ACTION PLAN</Text>
+      <Text style={styles.sectionLabel}>WHAT TO DO</Text>
 
       {!hasPending && (
         <Card style={styles.allClearCard}>
@@ -1419,6 +1716,33 @@ function ActiveActionCard({
 
 // ── Sub-components ──────────────────────────────────────────────────────────
 
+function CollapsibleSection({
+  label,
+  expanded,
+  onToggle,
+}: {
+  label: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <View style={styles.sectionPadded}>
+      <TouchableOpacity
+        onPress={onToggle}
+        activeOpacity={0.7}
+        style={styles.collapseToggleRow}
+      >
+        <Text style={styles.collapseToggleText}>{label}</Text>
+        <Ionicons
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={18}
+          color={COLORS.primary.DEFAULT}
+        />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function DetailRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.detailRow}>
@@ -1465,9 +1789,9 @@ function LineItemsSection({ ledgerLines }: { ledgerLines: BillingLedgerLine[] })
   if (lineItems.length === 0) {
     return (
       <View style={styles.sectionPadded}>
-        <Text style={styles.sectionLabel}>LINE ITEMS</Text>
+        <Text style={styles.sectionLabel}>CHARGES</Text>
         <Card>
-          <Text style={styles.noLineItemsText}>No line items extracted yet</Text>
+          <Text style={styles.noLineItemsText}>No individual charges extracted yet</Text>
         </Card>
       </View>
     );
@@ -1475,7 +1799,7 @@ function LineItemsSection({ ledgerLines }: { ledgerLines: BillingLedgerLine[] })
 
   return (
     <View style={styles.sectionPadded}>
-      <Text style={styles.sectionLabel}>LINE ITEMS ({lineItems.length})</Text>
+      <Text style={styles.sectionLabel}>CHARGES ({lineItems.length})</Text>
       {lineItems.map((item) => {
         const isExpanded = expandedId === item.id;
         return (
@@ -3862,5 +4186,171 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.sm,
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.semibold,
+  },
+
+  // ── Stage-based additions ────────────────────────────────────────────
+  // Next-step hint (stage 1)
+  nextStepCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderRadius: 12,
+    padding: 14,
+    gap: 12,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.primary.DEFAULT,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  nextStepIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nextStepContent: {
+    flex: 1,
+  },
+  nextStepTitle: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  nextStepDetail: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  nextStepButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: COLORS.primary.DEFAULT,
+  },
+  nextStepButtonText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.inverse,
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
+
+  // Brief summary card (stage 2 complex path)
+  briefSummaryCard: {
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border.DEFAULT,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  briefSummaryEyebrow: {
+    fontSize: FONT_SIZES.xs,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.tertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+  briefSummaryAmountLabel: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    fontWeight: FONT_WEIGHTS.semibold,
+    marginTop: 6,
+  },
+  briefSummaryAmount: {
+    fontSize: FONT_SIZES['3xl'],
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.primary.DEFAULT,
+    marginBottom: 10,
+  },
+  briefSummaryFindingRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 6,
+  },
+  briefSummaryFindingText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.DEFAULT,
+    lineHeight: 20,
+    flex: 1,
+  },
+
+  // Resolution card (stage 4)
+  resolutionCard: {
+    alignItems: 'center',
+    backgroundColor: COLORS.success.DEFAULT + '0D',
+    borderRadius: 12,
+    padding: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.success.DEFAULT,
+    gap: 8,
+  },
+  resolutionTitle: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.text.DEFAULT,
+  },
+  resolutionDetail: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+  },
+
+  // Tab bar
+  tabBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 24,
+    marginTop: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border.DEFAULT,
+  },
+  tabItem: {
+    marginRight: 24,
+    paddingBottom: 2,
+  },
+  tabLabel: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.secondary,
+    paddingVertical: 10,
+  },
+  tabLabelActive: {
+    color: COLORS.primary.DEFAULT,
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
+  tabUnderline: {
+    height: 2,
+    backgroundColor: 'transparent',
+    borderRadius: 1,
+  },
+  tabUnderlineActive: {
+    backgroundColor: COLORS.primary.DEFAULT,
+  },
+
+  // Collapse toggle
+  collapseToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    borderRadius: 10,
+  },
+  collapseToggleText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
   },
 });

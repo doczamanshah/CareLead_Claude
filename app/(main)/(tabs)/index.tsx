@@ -118,7 +118,7 @@ const MODULE_CARDS = [
   { key: 'medications', icon: 'medkit' as const, label: 'Meds', route: '/(main)/medications' },
   { key: 'appointments', icon: 'calendar' as const, label: 'Appts', route: '/(main)/appointments' },
   { key: 'results', icon: 'flask-outline' as const, label: 'Results', route: '/(main)/results' },
-  { key: 'billing', icon: 'receipt' as const, label: 'Bills', route: '/(main)/billing' },
+  { key: 'billing', icon: 'receipt' as const, label: 'Bills & Insurance', route: '/(main)/billing' },
   { key: 'preventive', icon: 'shield-checkmark-outline' as const, label: 'Preventive', route: '/(main)/preventive' },
   { key: 'caregivers', icon: 'people' as const, label: 'Care Team', route: '/(main)/caregivers' },
   { key: 'documents', icon: 'document-text' as const, label: 'Docs', route: '/(main)/(tabs)/documents' },

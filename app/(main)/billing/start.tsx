@@ -67,7 +67,7 @@ export default function StartBillingCaseScreen() {
       <SafeAreaView style={styles.safeArea}>
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={COLORS.primary.DEFAULT} />
-          <Text style={styles.busyText}>Creating your case...</Text>
+          <Text style={styles.busyText}>Getting things ready...</Text>
         </View>
       </SafeAreaView>
     );
@@ -85,6 +85,9 @@ export default function StartBillingCaseScreen() {
             <Text style={styles.backText}>Back</Text>
           </TouchableOpacity>
           <Text style={styles.title}>Start a New Bill</Text>
+          <Text style={styles.subtitle}>
+            Tell us about your bill — or just tap Continue to track it.
+          </Text>
         </View>
 
         <View style={styles.body}>
@@ -161,6 +164,12 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES['2xl'],
     fontWeight: FONT_WEIGHTS.bold,
     color: COLORS.text.DEFAULT,
+  },
+  subtitle: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.text.secondary,
+    marginTop: 4,
+    lineHeight: 20,
   },
 
   // Body

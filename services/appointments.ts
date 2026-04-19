@@ -104,6 +104,7 @@ export async function createAppointment(
       timezone: params.timezone ?? 'America/Chicago',
       status: params.status ?? 'scheduled',
       plan_status: 'none',
+      context_json: params.context_json ?? null,
       created_by: userId,
     })
     .select()
@@ -312,6 +313,7 @@ export async function generateAppointmentVisitPrep(
     },
     facts: (facts ?? []) as ProfileFact[],
     caregivers,
+    context: appointment.context_json ?? null,
   });
 
   const { data: updated, error: updateError } = await supabase

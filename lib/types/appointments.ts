@@ -63,6 +63,59 @@ export interface Appointment {
    * uncaptured appointments as high-priority "How did it go?" prompts.
    */
   post_visit_captured: boolean;
+  /**
+   * Extra context captured when the patient created the appointment via the
+   * freeform/dictation entry flow. Read by visit-prep generation so the
+   * initial question list reflects what the patient actually cares about.
+   */
+  context_json: AppointmentContext | null;
+}
+
+/**
+ * Optional freeform context stored alongside the structured appointment
+ * fields. Populated by the dictation-first creation flow; null for
+ * manually-entered appointments.
+ */
+export interface AppointmentContext {
+  reason_for_visit?: string;
+  concerns_to_discuss?: string[];
+  companion?: string;
+  transportation?: string;
+  special_needs?: string[];
+  prep_notes?: string;
+  /** The raw freeform text the patient originally dictated/typed. */
+  freeform_input?: string;
+}
+
+/**
+ * Result shape returned by the extract-appointment Edge Function. Used to
+ * pre-fill the review screen and to construct the final appointment +
+ * context_json record when the patient confirms.
+ */
+export interface ExtractedAppointment {
+  title: string | null;
+  appointment_type:
+    | 'doctor_visit'
+    | 'labs'
+    | 'imaging'
+    | 'procedure'
+    | 'therapy'
+    | 'other'
+    | null;
+  provider_name: string | null;
+  facility_name: string | null;
+  location_address: string | null;
+  date: string | null;
+  time: string | null;
+  date_description: string | null;
+  reason_for_visit: string | null;
+  concerns_to_discuss: string[];
+  companion: string | null;
+  transportation: string | null;
+  special_needs: string[];
+  prep_notes: string | null;
+  additional_context: string | null;
+  confidence: number;
 }
 
 // ── Visit Prep ─────────────────────────────────────────────────────────────
@@ -199,6 +252,7 @@ export interface CreateAppointmentParams {
   end_time?: string;
   timezone?: string;
   status?: AppointmentStatus;
+  context_json?: AppointmentContext;
 }
 
 export interface UpdateAppointmentParams {

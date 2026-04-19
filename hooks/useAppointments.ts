@@ -14,6 +14,7 @@ import {
 } from '@/services/appointments';
 import type { CaregiverSuggestionStatus } from '@/lib/types/appointments';
 import { generateVisitPacket } from '@/services/visitPacket';
+import { extractAppointmentFromText } from '@/services/appointmentExtraction';
 import {
   processVisitPrepInput,
   mergeAdditionalInput,
@@ -317,6 +318,27 @@ export function useUpdateCaregiverSuggestionStatus() {
       queryClient.invalidateQueries({
         queryKey: ['appointments', 'list', data.profile_id],
       });
+    },
+  });
+}
+
+/**
+ * Extract structured appointment fields from a patient's freeform
+ * description (typed or dictated). Does not persist anything — the caller
+ * reviews the result and then saves via `useCreateAppointment`.
+ */
+export function useExtractAppointment() {
+  return useMutation({
+    mutationFn: async ({
+      text,
+      profileName,
+    }: {
+      text: string;
+      profileName?: string | null;
+    }) => {
+      const result = await extractAppointmentFromText(text, profileName);
+      if (!result.success) throw new Error(result.error);
+      return result.data;
     },
   });
 }

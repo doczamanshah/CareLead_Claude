@@ -1226,3 +1226,100 @@ When building a new module, follow this exact sequence:
 - [ ] UI/UX polish pass across all screens — PLANNED
 - [ ] Performance optimization — PLANNED
 - [ ] App Store preparation — PLANNED
+
+### Phase 3: POLISH, REFINE, AND DEPLOY — IN PROGRESS
+
+#### Item 1: Sign-up / Sign-in Overhaul — COMPLETE
+- **Phone OTP as primary auth** via Twilio Verify + Supabase Phone provider
+- **New auth screens**: `welcome`, `phone-entry`, `verify-otp`, `collect-name`, `email-auth` (fallback)
+- **Onboarding wizard**: 4-step flow (who is this for → basic profile → quick win → welcome)
+- **Biometric unlock**: Face ID / Touch ID with auto-lock on background, PIN fallback
+- **Caregiver invites**: simplified 3-step wizard, QR codes, accept-invite screen, deep linking
+- **HIPAA security**: auth audit logging, session expiry, sign-out cleanup, PHI-safe notifications, app switcher privacy overlay
+- **Key files**: `app/(auth)/` screens, `services/auth.ts`, `services/biometric.ts`, `services/securityAudit.ts`, `stores/lockStore.ts`
+
+#### Item 2: Profile Building Strategy — COMPLETE
+**Group 1 — Passive Enrichment:**
+- Cross-document profile enrichment (`services/profileEnrichment.ts`)
+- Ask gap detection (`services/askGapActions.ts`)
+- Post-appointment quick capture (`app/(main)/appointments/[id]/post-visit-capture.tsx`)
+- Medication refill change detection (`components/RefillChangeSheet.tsx`, `SkipReasonSheet.tsx`)
+
+**Group 2 — Active Triggers:**
+- Pre-appointment profile accuracy check (`services/preAppointmentCheck.ts`)
+- Periodic profile review (`services/profileReview.ts`, `app/(main)/profile/review.tsx`)
+- Life event triggers (`services/lifeEventTriggers.ts`, `stores/lifeEventStore.ts`)
+- Caregiver-driven enrichment (`services/caregiverEnrichment.ts`, `app/(main)/caregivers/contribute.tsx`)
+
+**Group 3 — External Sources:**
+- Photo batch import "Catch Up" flow (`app/(main)/capture/catch-up*.tsx`, `services/batchCapture.ts`)
+- Standalone medication label snap (`app/(main)/medications/snap-label.tsx`)
+- CCD/CCDA health summary import (`supabase/functions/extract-health-summary`, `app/(main)/capture/import-*.tsx`)
+
+**Group 4 — Progressive Enrichment UX:**
+- Smart context-aware nudge engine (`services/smartEnrichment.ts`)
+- Micro-capture inline components (`components/MicroCapture.tsx`)
+- Milestone celebration system
+- Profile tier visualization (seedling → tree)
+- Redesigned Strengthen Your Profile screen
+
+**Group 5 — Data Quality and Trust:**
+- Staleness detection with category-specific thresholds (`services/dataQuality.ts`)
+- Cross-module validation (medication↔condition, condition↔provider)
+- Freshness indicators on AnswerCards / SummaryListCards / LabTableCards
+- Confirm-still-current quick actions
+- Data quality detail screen
+
+**New Edge Functions added in Phase 3:**
+- `extract-med-label` — medication bottle/label extraction
+- `extract-health-summary` — CCD/CCDA and health summary extraction
+
+**New patterns established in Phase 3:**
+- Enrichment store (`stores/enrichmentStore.ts`) for cross-document suggestions
+- Life event store (`stores/lifeEventStore.ts`) for contextual follow-up prompts
+- Smart nudge engine replaces static completeness scores
+- Micro-capture pattern: inline one-tap actions without navigation
+- Profile tiers replace percentage-based completeness
+- 14-day dismissal cooldown for nudges and prompts
+- Batch capture store for multi-photo processing
+
+#### Item 3: Bills & EOBs Simplification — COMPLETE
+Pure UI/UX refactor of the billing module — services, hooks, and data layer unchanged.
+
+**Progressive disclosure (stage-based case detail):**
+- `services/billingStage.ts` — `determineBillingStage()` maps a case to one of four stages (`just_started` → `analyzed` → `in_progress` → `resolved`) based on its data, not its `status` column
+- `isSimpleBill()` — detects straightforward bills (no critical findings, ≤1 warning, confidence ≥0.7, clear patient responsibility)
+- Case detail (`app/(main)/billing/[id]/index.tsx`) renders only the content relevant to the current stage; tabs (Overview / Details / Activity) appear once there's enough content to warrant them
+
+**Simple bill card:**
+- `components/modules/SimpleBillCard.tsx` — for clean bills, shows "You owe: $X" + three actions (Record Payment, Something seems wrong, Save for later); everything else collapsed behind "See full details"
+- "Something seems wrong" transitions to the full tabbed view; the ideal path for 60%+ of bills
+
+**Tabbed detailed view:**
+- Three sticky tabs: Overview (findings + action plan + summary), Details (charges, documents, denials), Activity (calls, payments, timeline)
+- Tabs are hidden when their content is empty — no "Activity" tab until there are calls/payments/timeline events
+
+**Case list cleanup (`app/(main)/billing/index.tsx`):**
+- Header: "Bills & EOBs" → "Your Bills"
+- Cards show only provider + service date + key number ("You owe: $X" / "Paid in full" / "Needs attention" / "Processing…" / "Resolved — Paid $X") + friendly status pill + subtle stage icon
+- Removed: findings count badge, document count, last-activity timestamp (available inside the case)
+
+**Language cleanup across the module:**
+- "Billing Case" → "Bill"; "New Billing Case" → "Track a Bill"
+- "Line Items" → "Charges"; "Your Action Plan" → "What To Do"
+- "Case strength" card title → "How complete is this bill?"
+- Status labels: `open` "New", `in_review` "Reviewing", `action_plan` "Has next steps", `in_progress` "In Progress", `resolved` "Done", `closed` "Closed" (in `BILLING_STATUS_LABELS`)
+- Home module shortcut: "Bills" → "Bills & Insurance"
+- "Reconciliation" removed from user-facing copy entirely
+
+**Extraction states (stage 1):**
+- Processing: "Reading your bill…"
+- Failed: "We couldn't read this clearly. You can try a better photo or add details manually."
+- Context-aware next-step hint: "Upload your bill or EOB", "Upload your EOB to check for errors", "Upload the matching bill"
+
+#### Phase 3: Remaining Items
+- [ ] Item 4: Tasks & reminders refinement
+- [ ] Item 5: Preventive Care expansion
+- [ ] Item 6: Retrieval efficiency
+- [ ] Item 7: HIPAA alignment review
+- [ ] Item 8: App Store preparation
