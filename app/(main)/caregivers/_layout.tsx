@@ -29,6 +29,14 @@ export default function CaregiversLayout() {
         options={{ title: 'Invite Caregiver', animation: 'slide_from_right' }}
       />
       <Stack.Screen
+        name="accept-invite"
+        options={{ title: 'Accept Invite', animation: 'slide_from_right' }}
+      />
+      <Stack.Screen
+        name="enter-code"
+        options={{ title: 'Enter Invite Code', animation: 'slide_from_right' }}
+      />
+      <Stack.Screen
         name="[grantId]"
         options={{ title: 'Caregiver Details', animation: 'slide_from_right' }}
       />

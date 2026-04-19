@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { View, Text, Alert, Modal, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, Alert, Modal, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -11,7 +12,12 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useCreateDependentProfile } from '@/hooks/useProfiles';
 import { useAuth } from '@/hooks/useAuth';
-import { useAccessGrants, useMyAccessGrants, usePendingInvites } from '@/hooks/useCaregivers';
+import {
+  useAccessGrants,
+  useMyAccessGrants,
+  usePendingInvites,
+  usePendingInvitesForMe,
+} from '@/hooks/useCaregivers';
 import { PERMISSION_TEMPLATE_MAP } from '@/lib/constants/permissionTemplates';
 import type { PermissionTemplateId } from '@/lib/constants/permissionTemplates';
 import { COLORS } from '@/lib/constants/colors';
@@ -26,6 +32,10 @@ export default function HouseholdScreen() {
   const householdId = activeProfile?.household_id ?? null;
   const { data: pendingInvites } = usePendingInvites(householdId);
   const { data: myGrants } = useMyAccessGrants();
+  const { data: invitesForMe } = usePendingInvitesForMe(
+    user?.email ?? null,
+    user?.phone ?? null,
+  );
 
   // Check if current user is a household owner (has a 'self' profile)
   const isOwner = profiles.some((p) => p.relationship === 'self' && p.user_id === user?.id);
@@ -72,8 +82,47 @@ export default function HouseholdScreen() {
     );
   }
 
+  const pendingForMe = invitesForMe ?? [];
+
   return (
     <ScreenLayout title="Household">
+      {/* Pending invites waiting for this user */}
+      {pendingForMe.length > 0 && (
+        <View style={styles.bannerWrap}>
+          {pendingForMe.map((inv) => (
+            <TouchableOpacity
+              key={inv.invite_id}
+              style={styles.banner}
+              activeOpacity={0.7}
+              onPress={() =>
+                router.push({
+                  pathname: '/(main)/caregivers/accept-invite',
+                  params: { token: inv.token },
+                })
+              }
+            >
+              <View style={styles.bannerIcon}>
+                <Ionicons name="mail-unread" size={20} color={COLORS.primary.DEFAULT} />
+              </View>
+              <View style={styles.bannerBody}>
+                <Text style={styles.bannerTitle}>
+                  {inv.inviter_display_name
+                    ? `${inv.inviter_display_name} invited you`
+                    : 'You have a pending invite'}
+                </Text>
+                <Text style={styles.bannerSubtitle}>
+                  Tap to review{' '}
+                  {PERMISSION_TEMPLATE_MAP[inv.permission_template as PermissionTemplateId]?.name
+                    ? `(${PERMISSION_TEMPLATE_MAP[inv.permission_template as PermissionTemplateId]!.name})`
+                    : ''}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={COLORS.text.tertiary} />
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
       {/* Family Members Section */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Family Members</Text>
@@ -137,6 +186,16 @@ export default function HouseholdScreen() {
           </View>
         </View>
       )}
+
+      {/* Manual invite code entry — available to anyone */}
+      <TouchableOpacity
+        style={styles.codeEntryLink}
+        activeOpacity={0.7}
+        onPress={() => router.push('/(main)/caregivers/enter-code')}
+      >
+        <Ionicons name="key-outline" size={16} color={COLORS.primary.DEFAULT} />
+        <Text style={styles.codeEntryText}>I have an invite code</Text>
+      </TouchableOpacity>
 
       {/* My Access Section — for caregivers viewing what they have access to */}
       {!isOwner && (myGrants ?? []).length > 0 && (
@@ -251,6 +310,54 @@ function CaregiverCountBadge({
 }
 
 const styles = StyleSheet.create({
+  bannerWrap: {
+    marginBottom: 20,
+    gap: 8,
+  },
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 12,
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '33',
+  },
+  bannerIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  bannerBody: {
+    flex: 1,
+  },
+  bannerTitle: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  bannerSubtitle: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    marginTop: 2,
+  },
+  codeEntryLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 14,
+    marginBottom: 16,
+  },
+  codeEntryText: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
+  },
   section: {
     marginBottom: 28,
   },

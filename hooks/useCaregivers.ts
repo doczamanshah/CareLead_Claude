@@ -7,6 +7,10 @@ import {
   fetchPendingInvites,
   acceptInvite,
   revokeInvite,
+  cancelInvite,
+  resendInvite,
+  lookupInviteByToken,
+  checkPendingInvitesForUser,
   revokeAccess,
   updatePermissions,
   fetchConsentHistory,
@@ -143,16 +147,71 @@ export function useAcceptInvite() {
 
 export function useRevokeInvite() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async (inviteId: string) => {
-      const result = await revokeInvite(inviteId, '');
+      const result = await revokeInvite(inviteId, user?.id ?? '');
       if (!result.success) throw new Error(result.error);
       return result.data;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['caregivers', 'invites', data.household_id] });
     },
+  });
+}
+
+export function useCancelInvite() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+
+  return useMutation({
+    mutationFn: async (inviteId: string) => {
+      if (!user?.id) throw new Error('Not authenticated');
+      const result = await cancelInvite(inviteId, user.id);
+      if (!result.success) throw new Error(result.error);
+      return result.data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['caregivers', 'invites', data.household_id] });
+    },
+  });
+}
+
+export function useResendInvite() {
+  return useMutation({
+    mutationFn: async (inviteId: string) => {
+      const result = await resendInvite(inviteId);
+      if (!result.success) throw new Error(result.error);
+      return result.data;
+    },
+  });
+}
+
+export function useInviteLookup(token: string | null) {
+  return useQuery({
+    queryKey: ['caregivers', 'lookup', token],
+    queryFn: async () => {
+      if (!token) return null;
+      const result = await lookupInviteByToken(token);
+      if (!result.success) throw new Error(result.error);
+      return result.data;
+    },
+    enabled: !!token,
+    retry: false,
+  });
+}
+
+export function usePendingInvitesForMe(email: string | null, phone: string | null) {
+  return useQuery({
+    queryKey: ['caregivers', 'pending-for-me', email, phone],
+    queryFn: async () => {
+      if (!email && !phone) return [];
+      const result = await checkPendingInvitesForUser(email, phone);
+      if (!result.success) throw new Error(result.error);
+      return result.data;
+    },
+    enabled: !!(email || phone),
   });
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
+import * as Linking from 'expo-linking';
 import { Slot, useRouter, useSegments } from 'expo-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -23,6 +24,12 @@ import {
   requestNotificationPermissions,
   addNotificationResponseListener,
 } from '@/lib/utils/notifications';
+import {
+  parseInviteToken,
+  setPendingInviteToken,
+  getPendingInviteToken,
+  clearPendingInviteToken,
+} from '@/lib/utils/deepLinks';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -57,6 +64,54 @@ function AuthGate() {
 
     return () => {
       notificationListenerRef.current?.remove();
+    };
+  }, [router]);
+
+  // Deep-link handler for carelead://invite/[token]
+  //   - Cold start: check Linking.getInitialURL()
+  //   - While running: listen for 'url' events
+  // If the user is authenticated and unlocked, we route immediately. Otherwise
+  // the token is saved to SecureStore and consumed by the route-guard effect
+  // below once auth is ready.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function handleIncomingUrl(url: string | null) {
+      const token = parseInviteToken(url);
+      if (!token) return;
+
+      const { session } = useAuthStore.getState();
+      const { isLocked } = useLockStore.getState();
+
+      if (session?.user && !isLocked) {
+        // Authenticated and unlocked — go straight to the accept screen
+        await clearPendingInviteToken();
+        router.push({
+          pathname: '/(main)/caregivers/accept-invite',
+          params: { token },
+        });
+      } else {
+        // Stash the token; route-guard effect will pick it up once auth is ready.
+        await setPendingInviteToken(token);
+      }
+    }
+
+    (async () => {
+      try {
+        const initial = await Linking.getInitialURL();
+        if (!cancelled) await handleIncomingUrl(initial);
+      } catch {
+        // Best-effort
+      }
+    })();
+
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      handleIncomingUrl(url);
+    });
+
+    return () => {
+      cancelled = true;
+      sub.remove();
     };
   }, [router]);
 
@@ -215,6 +270,37 @@ function AuthGate() {
     hasEvaluatedColdStart,
     router,
   ]);
+
+  // Resume a deferred invite once the user is fully signed in and unlocked.
+  // The deep-link listener above stashes the token if auth wasn't ready; as
+  // soon as we land in the main section we pick it up and navigate.
+  useEffect(() => {
+    if (isLoading) return;
+    if (!hasEvaluatedColdStart) return;
+    if (!session?.user) return;
+    if (isLocked) return;
+    if (!profilesLoaded) return;
+    const inMainGroup = segments[0] === '(main)';
+    if (!inMainGroup) return;
+    const onboardingCompleted =
+      session?.user?.user_metadata?.onboarding_completed === true;
+    if (!onboardingCompleted) return;
+
+    let cancelled = false;
+    (async () => {
+      const token = await getPendingInviteToken();
+      if (cancelled || !token) return;
+      await clearPendingInviteToken();
+      router.push({
+        pathname: '/(main)/caregivers/accept-invite',
+        params: { token },
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session, isLoading, hasEvaluatedColdStart, isLocked, profilesLoaded, segments, router]);
 
   if (isLoading || (session && !profilesLoaded) || !hasEvaluatedColdStart) {
     return <LoadingSpinner message="Loading CareLead..." />;

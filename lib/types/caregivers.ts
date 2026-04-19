@@ -73,3 +73,31 @@ export interface CreateInviteParams {
   profile_ids: string[];
   permission_template: PermissionTemplateId;
 }
+
+// ── Invite Lookup (via RPC) ──────────────────────────────────────────
+
+/**
+ * An invite surfaced by the security-definer lookup RPC. Includes the
+ * inviter's display name and the display names of each shared profile
+ * so the accept screen can render without additional queries.
+ */
+export interface InviteLookup {
+  invite_id: string;
+  household_id: string;
+  invited_by_user_id: string;
+  inviter_display_name: string | null;
+  invited_email: string | null;
+  invited_phone: string | null;
+  invited_name: string | null;
+  profile_ids: string[];
+  profile_names: string[] | null;
+  permission_template: PermissionTemplateId;
+  status: InviteStatus;
+  expires_at: string;
+  created_at: string;
+}
+
+/** Pending-invite lookup for the current user (keyed by phone/email). */
+export interface PendingInviteForUser extends Omit<InviteLookup, 'status'> {
+  token: string;
+}

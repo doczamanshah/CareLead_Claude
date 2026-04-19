@@ -7,6 +7,8 @@ import type {
   ConsentRecord,
   CaregiverInvite,
   CreateInviteParams,
+  InviteLookup,
+  PendingInviteForUser,
 } from '@/lib/types/caregivers';
 
 type ServiceResult<T> =
@@ -167,112 +169,135 @@ export async function fetchPendingInvites(
 }
 
 /**
- * Accept a caregiver invite by token. Creates access grants and consent records for each profile.
+ * Look up an invite by token (without accepting it). Used by the
+ * accept-invite screen to render invite details before the user confirms.
+ * Goes through a SECURITY DEFINER RPC so a caregiver who is not yet a
+ * household member can still read the invite row.
+ */
+export async function lookupInviteByToken(
+  token: string,
+): Promise<ServiceResult<InviteLookup>> {
+  const { data, error } = await supabase.rpc('lookup_invite_by_token', {
+    p_token: token,
+  });
+
+  if (error) {
+    return { success: false, error: error.message, code: error.code };
+  }
+
+  const rows = (data ?? []) as InviteLookup[];
+  if (rows.length === 0) {
+    return { success: false, error: 'Invite not found.' };
+  }
+
+  return { success: true, data: rows[0] };
+}
+
+/**
+ * Accept a caregiver invite by token. Delegates to a SECURITY DEFINER RPC
+ * that creates grants, consent records, adds the user to the household,
+ * and marks the invite accepted — all atomically server-side.
  */
 export async function acceptInvite(
   token: string,
-  userId: string,
+  _userId: string,
 ): Promise<ServiceResult<AccessGrant[]>> {
-  // 1. Fetch the invite
-  const { data: invite, error: fetchErr } = await supabase
+  const { data, error } = await supabase.rpc('accept_caregiver_invite', {
+    p_token: token,
+  });
+
+  if (error) {
+    // Normalise common messages from RAISE EXCEPTION so the UI can show them directly.
+    const msg = error.message || 'Failed to accept invitation.';
+    return { success: false, error: msg, code: error.code };
+  }
+
+  const grants = (data ?? []) as Array<{
+    grant_id: string;
+    profile_id: string;
+    permission_template: PermissionTemplateId;
+    scopes: PermissionScope[];
+  }>;
+
+  // Shape into the AccessGrant type the caller expects.
+  const now = new Date().toISOString();
+  const shaped: AccessGrant[] = grants.map((g) => ({
+    id: g.grant_id,
+    profile_id: g.profile_id,
+    grantee_user_id: '', // server-known; UI doesn't need it at this point
+    granted_by_user_id: '',
+    permission_template: g.permission_template,
+    scopes: g.scopes,
+    status: 'active',
+    granted_at: now,
+    revoked_at: null,
+    revoked_by: null,
+    expires_at: null,
+    created_at: now,
+    updated_at: now,
+  }));
+
+  return { success: true, data: shaped };
+}
+
+/**
+ * Check for pending invites addressed to a given phone or email. Returns
+ * invites the current user could accept (excludes their own outgoing ones).
+ */
+export async function checkPendingInvitesForUser(
+  email: string | null,
+  phone: string | null,
+): Promise<ServiceResult<PendingInviteForUser[]>> {
+  if (!email && !phone) {
+    return { success: true, data: [] };
+  }
+
+  const { data, error } = await supabase.rpc('find_invites_for_contact', {
+    p_email: email ?? null,
+    p_phone: phone ?? null,
+  });
+
+  if (error) {
+    return { success: false, error: error.message, code: error.code };
+  }
+
+  return { success: true, data: (data ?? []) as PendingInviteForUser[] };
+}
+
+/**
+ * Cancel (revoke) a pending invite. Alias for revokeInvite that records
+ * an audit event.
+ */
+export async function cancelInvite(
+  inviteId: string,
+  userId: string,
+): Promise<ServiceResult<CaregiverInvite>> {
+  return revokeInvite(inviteId, userId);
+}
+
+/**
+ * Re-share an existing invite: fetches the current invite row so the UI
+ * can re-open the share sheet with the same token. Does not create a new
+ * invite or extend expiry.
+ */
+export async function resendInvite(
+  inviteId: string,
+): Promise<ServiceResult<CaregiverInvite>> {
+  const { data, error } = await supabase
     .from('caregiver_invites')
     .select('*')
-    .eq('token', token)
-    .eq('status', 'pending')
+    .eq('id', inviteId)
     .single();
 
-  if (fetchErr || !invite) {
-    return { success: false, error: 'Invite not found or already used.' };
+  if (error || !data) {
+    return { success: false, error: error?.message ?? 'Invite not found.' };
   }
 
-  // Check expiration
-  if (new Date(invite.expires_at) < new Date()) {
-    await supabase
-      .from('caregiver_invites')
-      .update({ status: 'expired' })
-      .eq('id', invite.id);
-    return { success: false, error: 'This invitation has expired.' };
+  if (data.status !== 'pending') {
+    return { success: false, error: `This invitation is ${data.status} — create a new one.` };
   }
 
-  const template = PERMISSION_TEMPLATE_MAP[invite.permission_template as PermissionTemplateId];
-  const scopes = template?.scopes ?? [];
-
-  // 2. Create access grants for each profile
-  const grants: AccessGrant[] = [];
-  for (const profileId of invite.profile_ids) {
-    const { data: grant, error: grantErr } = await supabase
-      .from('profile_access_grants')
-      .insert({
-        profile_id: profileId,
-        grantee_user_id: userId,
-        granted_by_user_id: invite.invited_by_user_id,
-        permission_template: invite.permission_template,
-        scopes,
-        status: 'active',
-        granted_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
-
-    if (grantErr) {
-      return { success: false, error: grantErr.message, code: grantErr.code };
-    }
-
-    grants.push(grant as AccessGrant);
-
-    // 3. Create consent record
-    await supabase.from('consent_records').insert({
-      profile_id: profileId,
-      consenter_user_id: invite.invited_by_user_id,
-      grantee_user_id: userId,
-      grant_id: grant.id,
-      consent_type: 'access_granted',
-      permission_template: invite.permission_template,
-      scopes,
-    });
-
-    // Audit
-    await supabase.from('audit_events').insert({
-      profile_id: profileId,
-      actor_id: userId,
-      event_type: 'caregiver.access_granted',
-      metadata: {
-        grant_id: grant.id,
-        permission_template: invite.permission_template,
-        invite_id: invite.id,
-      },
-    });
-  }
-
-  // 4. Add user to household as caregiver if not already a member
-  const { data: existingMember } = await supabase
-    .from('household_members')
-    .select('id')
-    .eq('household_id', invite.household_id)
-    .eq('user_id', userId)
-    .eq('status', 'active')
-    .maybeSingle();
-
-  if (!existingMember) {
-    await supabase.from('household_members').insert({
-      household_id: invite.household_id,
-      user_id: userId,
-      role: 'caregiver',
-      status: 'active',
-    });
-  }
-
-  // 5. Mark invite as accepted
-  await supabase
-    .from('caregiver_invites')
-    .update({
-      status: 'accepted',
-      accepted_at: new Date().toISOString(),
-      accepted_by_user_id: userId,
-    })
-    .eq('id', invite.id);
-
-  return { success: true, data: grants };
+  return { success: true, data: data as CaregiverInvite };
 }
 
 /**
@@ -291,6 +316,22 @@ export async function revokeInvite(
 
   if (error) {
     return { success: false, error: error.message, code: error.code };
+  }
+
+  // Audit — one event per profile involved (non-PHI metadata only)
+  if (data && userId) {
+    const invite = data as CaregiverInvite;
+    for (const profileId of invite.profile_ids) {
+      await supabase.from('audit_events').insert({
+        profile_id: profileId,
+        actor_id: userId,
+        event_type: 'caregiver.invite_revoked',
+        metadata: {
+          invite_id: invite.id,
+          permission_template: invite.permission_template,
+        },
+      });
+    }
   }
 
   return { success: true, data: data as CaregiverInvite };
