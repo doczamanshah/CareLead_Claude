@@ -489,6 +489,24 @@ export default function SettingsScreen() {
         <TouchableOpacity
           style={styles.autoLockRow}
           activeOpacity={0.7}
+          onPress={() => router.push('/(main)/capture/import-summary')}
+        >
+          <View style={styles.autoLockContent}>
+            <Text style={styles.autoLockLabel}>Import health data</Text>
+            <Text style={styles.autoLockValue}>
+              Bring in a CCD/CCDA or PDF summary from your patient portal
+            </Text>
+          </View>
+          <Ionicons
+            name="chevron-forward"
+            size={18}
+            color={COLORS.text.tertiary}
+          />
+        </TouchableOpacity>
+        <View style={styles.pinWrap} />
+        <TouchableOpacity
+          style={styles.autoLockRow}
+          activeOpacity={0.7}
           onPress={() => router.push('/(main)/profile/review')}
         >
           <View style={styles.autoLockContent}>

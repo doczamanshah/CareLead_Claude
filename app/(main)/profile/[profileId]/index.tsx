@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
 import { useProfileDetail } from '@/hooks/useProfileDetail';
-import { useProfileGaps } from '@/hooks/useProfileGaps';
+import { useSmartEnrichment } from '@/hooks/useSmartEnrichment';
 import { useAccessGrants } from '@/hooks/useCaregivers';
 import { PROFILE_FACT_CATEGORIES } from '@/lib/types/profile';
 import type { ProfileFact, ProfileFactCategory } from '@/lib/types/profile';
@@ -24,8 +24,11 @@ function groupFactsByCategory(facts: ProfileFact[]): Record<string, ProfileFact[
 export default function ProfileOverviewScreen() {
   const { profileId } = useLocalSearchParams<{ profileId: string }>();
   const { data: profile, isLoading, error } = useProfileDetail(profileId ?? null);
-  const { data: gaps } = useProfileGaps(profileId);
   const { data: accessGrants } = useAccessGrants(profileId ?? null);
+  const { tierInfo, nonMilestoneNudges, totalFacts } = useSmartEnrichment(
+    profileId ?? null,
+    profile?.household_id ?? null,
+  );
   const router = useRouter();
 
   if (isLoading) return <ScreenLayout loading />;
@@ -33,29 +36,41 @@ export default function ProfileOverviewScreen() {
   if (!profile) return <ScreenLayout error={new Error('Profile not found')} />;
 
   const grouped = groupFactsByCategory(profile.facts);
-  const gapCount = gaps?.length ?? 0;
+  const nudgeCount = nonMilestoneNudges.length;
 
   return (
     <ScreenLayout>
-      {/* Strengthen Your Profile Card */}
-      {gapCount > 0 && (
-        <TouchableOpacity
-          style={styles.strengthenCard}
-          onPress={() =>
-            router.push(`/(main)/profile/${profileId}/strengthen`)
-          }
-        >
-          <View style={styles.strengthenContent}>
-            <Text style={styles.strengthenTitle}>
-              Strengthen Your Profile
-            </Text>
-            <Text style={styles.strengthenSubtitle}>
-              {gapCount} {gapCount === 1 ? 'item' : 'items'} could help CareLead work better for you
-            </Text>
-          </View>
-          <Text style={styles.strengthenArrow}>›</Text>
-        </TouchableOpacity>
-      )}
+      {/* Smart enrichment entry — tier + top nudge summary */}
+      <TouchableOpacity
+        style={styles.strengthenCard}
+        onPress={() =>
+          router.push(`/(main)/profile/${profileId}/strengthen`)
+        }
+        activeOpacity={0.8}
+      >
+        <View style={styles.strengthenIconWrap}>
+          <Ionicons
+            name={(tierInfo?.icon ?? 'leaf-outline') as keyof typeof Ionicons.glyphMap}
+            size={22}
+            color={COLORS.secondary.dark}
+          />
+        </View>
+        <View style={styles.strengthenContent}>
+          <Text style={styles.strengthenTitle}>
+            {tierInfo?.label ?? 'Your Health Profile'}
+          </Text>
+          <Text style={styles.strengthenSubtitle}>
+            {nudgeCount > 0
+              ? `${nudgeCount} suggested next step${nudgeCount === 1 ? '' : 's'} · ${totalFacts} facts tracked`
+              : `${totalFacts} facts tracked · all caught up`}
+          </Text>
+        </View>
+        <Ionicons
+          name="chevron-forward"
+          size={18}
+          color={COLORS.secondary.dark}
+        />
+      </TouchableOpacity>
 
       {/* Profile Header */}
       <View style={styles.profileHeader}>
@@ -251,12 +266,21 @@ const styles = StyleSheet.create({
   strengthenCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.accent.light,
+    gap: 12,
+    backgroundColor: COLORS.secondary.DEFAULT + '14',
     borderRadius: 12,
-    padding: 16,
+    padding: 14,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: COLORS.accent.DEFAULT,
+    borderColor: COLORS.secondary.DEFAULT + '33',
+  },
+  strengthenIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   strengthenContent: {
     flex: 1,
@@ -268,14 +292,8 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   strengthenSubtitle: {
-    fontSize: FONT_SIZES.sm,
+    fontSize: FONT_SIZES.xs,
     color: COLORS.text.secondary,
-  },
-  strengthenArrow: {
-    fontSize: 24,
-    color: COLORS.text.secondary,
-    fontWeight: FONT_WEIGHTS.bold,
-    marginLeft: 8,
   },
   profileHeader: {
     flexDirection: 'row',

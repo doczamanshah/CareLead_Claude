@@ -30,7 +30,8 @@ export type ProfileFactCategory =
   | 'pharmacy'
   | 'emergency_contact'
   | 'goal'
-  | 'measurement';
+  | 'measurement'
+  | 'immunization';
 
 export interface ProfileFact {
   id: string;

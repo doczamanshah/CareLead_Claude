@@ -24,6 +24,28 @@ export default function CaptureLayout() {
       <Stack.Screen name="camera" options={{ title: 'Take Photo' }} />
       <Stack.Screen name="upload" options={{ title: 'Upload Document' }} />
       <Stack.Screen name="voice" options={{ title: 'Voice Note' }} />
+      <Stack.Screen name="catch-up" options={{ headerShown: false }} />
+      <Stack.Screen name="catch-up-capture" options={{ headerShown: false }} />
+      <Stack.Screen name="catch-up-review" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="catch-up-processing"
+        options={{ headerShown: false, gestureEnabled: false }}
+      />
+      <Stack.Screen
+        name="catch-up-summary"
+        options={{ headerShown: false, gestureEnabled: false }}
+      />
+      <Stack.Screen name="import-summary" options={{ headerShown: false }} />
+      <Stack.Screen name="import-summary-camera" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="import-processing"
+        options={{ headerShown: false, gestureEnabled: false }}
+      />
+      <Stack.Screen name="import-review" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="import-done"
+        options={{ headerShown: false, gestureEnabled: false }}
+      />
     </Stack>
   );
 }

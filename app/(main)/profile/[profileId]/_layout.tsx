@@ -30,7 +30,7 @@ export default function ProfileIdLayout() {
       />
       <Stack.Screen name="edit" options={{ title: 'Edit Profile' }} />
       <Stack.Screen name="add-fact" options={{ title: 'Add Information' }} />
-      <Stack.Screen name="strengthen" options={{ title: 'Strengthen Your Profile' }} />
+      <Stack.Screen name="strengthen" options={{ title: 'Your Health Profile' }} />
     </Stack>
   );
 }

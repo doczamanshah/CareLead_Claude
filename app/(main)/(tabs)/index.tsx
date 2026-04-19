@@ -61,6 +61,8 @@ import {
   useIsCaregiverForProfile,
 } from '@/hooks/useCaregiverEnrichment';
 import type { CaregiverEnrichmentPrompt } from '@/lib/types/caregivers';
+import { useSmartEnrichment, getMilestone } from '@/hooks/useSmartEnrichment';
+import { SmartNudgeCard, MilestoneBadgeCard } from '@/components/SmartNudgeCard';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -97,6 +99,9 @@ function isDueToday(task: Task): boolean {
 }
 
 const QUICK_ACTIONS = [
+  { key: 'catch-up', icon: 'albums' as const, label: 'Catch Up', route: '/(main)/capture/catch-up' },
+  { key: 'snap-label', icon: 'camera-outline' as const, label: 'Snap a Label', route: '/(main)/medications/snap-label' },
+  { key: 'import-summary', icon: 'cloud-download-outline' as const, label: 'Import Summary', route: '/(main)/capture/import-summary' },
   { key: 'camera', icon: 'camera' as const, label: 'Take Photo', route: '/(main)/capture/camera' },
   { key: 'document', icon: 'document-text' as const, label: 'Add Document', route: '/(main)/capture/upload' },
   { key: 'voice', icon: 'mic' as const, label: 'Voice Note', route: '/(main)/capture/voice' },
@@ -152,6 +157,17 @@ export default function HomeScreen() {
     2,
   );
   const dismissCaregiverPrompt = useDismissCaregiverPrompt();
+
+  // Smart enrichment — top nudge surfaces in briefing, new milestones celebrate
+  const {
+    topNudge,
+    unseenMilestones,
+    dismiss: dismissNudge,
+    markSeen: markMilestonesSeen,
+  } = useSmartEnrichment(
+    activeProfileId,
+    activeProfile?.household_id ?? null,
+  );
 
   // First-time caregiver → contribute screen. One-shot per user+profile.
   const caregiverRedirectRef = useRef<string | null>(null);
@@ -548,6 +564,26 @@ export default function HomeScreen() {
         </LinearGradient>
 
         <View style={styles.body}>
+          {/* Milestone celebration — first-view only, marked seen after display */}
+          {unseenMilestones.length > 0 && (
+            <View style={styles.lifeEventPromptWrap}>
+              {(() => {
+                const id = unseenMilestones[0];
+                const meta = getMilestone(id);
+                if (!meta) return null;
+                // Fire-and-forget mark-seen so it doesn't repeat tomorrow.
+                void markMilestonesSeen([id]);
+                return (
+                  <MilestoneBadgeCard
+                    title={meta.title}
+                    detail={meta.detail}
+                    icon={meta.icon}
+                  />
+                );
+              })()}
+            </View>
+          )}
+
           {/* Life-event prompt — surfaces contextually after a profile change */}
           {topLifeEventPrompt && (
             <View style={styles.lifeEventPromptWrap}>
@@ -918,6 +954,28 @@ export default function HomeScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* SMART ENRICHMENT: top nudge + link to full suggestions */}
+          {topNudge && activeProfileId && (
+            <View style={styles.zone}>
+              <View style={styles.nudgeHeader}>
+                <Text style={styles.sectionTitle}>SUGGESTED FOR YOU</Text>
+                <TouchableOpacity
+                  onPress={() =>
+                    router.push(`/(main)/profile/${activeProfileId}/strengthen`)
+                  }
+                  hitSlop={8}
+                >
+                  <Text style={styles.nudgeViewAll}>View all</Text>
+                </TouchableOpacity>
+              </View>
+              <SmartNudgeCard
+                nudge={topNudge}
+                profileId={activeProfileId}
+                onDismiss={() => dismissNudge(topNudge.id)}
+              />
+            </View>
+          )}
+
           {/* ZONE 3: QUICK ACTIONS */}
           <View style={styles.zone}>
             <Text style={styles.sectionTitle}>QUICK ACTIONS</Text>
@@ -1222,6 +1280,19 @@ const styles = StyleSheet.create({
   },
   briefingFooterText: {
     fontSize: 14,
+    color: COLORS.primary.DEFAULT,
+    fontWeight: FONT_WEIGHTS.semibold,
+  },
+
+  // Smart enrichment
+  nudgeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+  },
+  nudgeViewAll: {
+    fontSize: 13,
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.semibold,
   },

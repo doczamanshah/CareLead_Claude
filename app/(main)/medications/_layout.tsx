@@ -11,6 +11,7 @@ export default function MedicationsLayout() {
     >
       <Stack.Screen name="index" />
       <Stack.Screen name="create" />
+      <Stack.Screen name="snap-label" />
       <Stack.Screen name="[medicationId]" />
       <Stack.Screen name="refill/[medicationId]" />
     </Stack>

@@ -85,6 +85,12 @@ const CATEGORY_FIELDS: Record<ProfileFactCategory, { key: string; label: string;
     { key: 'date', label: 'Date', placeholder: 'YYYY-MM-DD' },
     { key: 'notes', label: 'Notes', placeholder: 'Any additional details' },
   ],
+  immunization: [
+    { key: 'name', label: 'Vaccine', placeholder: 'e.g. Flu shot, Tdap' },
+    { key: 'date', label: 'Date', placeholder: 'YYYY-MM-DD' },
+    { key: 'site', label: 'Site', placeholder: 'e.g. Left arm' },
+    { key: 'notes', label: 'Notes', placeholder: 'Any additional details' },
+  ],
 };
 
 export default function AddFactScreen() {

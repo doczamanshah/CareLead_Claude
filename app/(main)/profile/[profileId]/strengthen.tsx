@@ -1,573 +1,519 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useMemo, useState } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
-  ScrollView,
-  Alert,
-  Share,
   StyleSheet,
+  Share,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
-import { useProfileGaps, useFillProfileGap, useFillGeneralGap } from '@/hooks/useProfileGaps';
+import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useAccessGrants } from '@/hooks/useCaregivers';
-import { inferMedicationDefaults, FREQUENCY_OPTIONS } from '@/lib/utils/medicalInference';
+import { useSmartEnrichment, getMilestone } from '@/hooks/useSmartEnrichment';
+import {
+  MilestoneBadgeCard,
+  SmartNudgeCard,
+} from '@/components/SmartNudgeCard';
+import type { CategoryHealth } from '@/services/smartEnrichment';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
-import type { ProfileGap } from '@/services/profileGaps';
 
-const CATEGORY_ICONS: Record<string, string> = {
-  medication: '💊',
-  condition: '🩺',
-  allergy: '⚠️',
-  insurance: '🛡️',
-  general: '📋',
-};
-
-function groupGapsByCategory(gaps: ProfileGap[]): Record<string, ProfileGap[]> {
-  const grouped: Record<string, ProfileGap[]> = {};
-  for (const gap of gaps) {
-    if (!grouped[gap.category]) grouped[gap.category] = [];
-    grouped[gap.category].push(gap);
-  }
-  return grouped;
+function healthColor(health: CategoryHealth): string {
+  if (health === 'good') return COLORS.success.DEFAULT;
+  if (health === 'sparse') return COLORS.warning.DEFAULT;
+  return COLORS.error.DEFAULT;
 }
 
-function categoryLabel(cat: string): string {
-  const labels: Record<string, string> = {
-    medication: 'Medications',
-    condition: 'Conditions',
-    allergy: 'Allergies',
-    insurance: 'Insurance',
-    general: 'General',
-  };
-  return labels[cat] ?? cat.charAt(0).toUpperCase() + cat.slice(1);
+function healthIcon(
+  health: CategoryHealth,
+): keyof typeof Ionicons.glyphMap {
+  if (health === 'good') return 'checkmark-circle';
+  if (health === 'sparse') return 'alert-circle-outline';
+  return 'close-circle';
 }
 
 export default function StrengthenProfileScreen() {
   const { profileId } = useLocalSearchParams<{ profileId: string }>();
   const router = useRouter();
-  const { data: gaps, isLoading, error } = useProfileGaps(profileId);
-  const { data: accessGrants } = useAccessGrants(profileId ?? null);
-  const fillGap = useFillProfileGap();
-  const fillGeneral = useFillGeneralGap();
+  const { activeProfile } = useActiveProfile();
+  const householdId = activeProfile?.household_id ?? null;
 
+  const {
+    nonMilestoneNudges,
+    milestoneNudges,
+    tierInfo,
+    categoryBreakdown,
+    earnedMilestones,
+    totalFacts,
+    isLoading,
+    dismiss,
+  } = useSmartEnrichment(profileId ?? null, householdId);
+
+  const { data: accessGrants } = useAccessGrants(profileId ?? null);
   const activeCaregiver = useMemo(() => {
     const list = accessGrants ?? [];
     return list.find((g) => g.status === 'active') ?? null;
   }, [accessGrants]);
 
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
-  const [completedGaps, setCompletedGaps] = useState<Set<string>>(new Set());
+  const [categoryExpanded, setCategoryExpanded] = useState(false);
 
-  const activeGaps = useMemo(
-    () => (gaps ?? []).filter((g) => !completedGaps.has(g.id)),
-    [gaps, completedGaps],
-  );
+  if (isLoading || !profileId || !tierInfo) {
+    return <ScreenLayout loading />;
+  }
 
-  const totalGaps = gaps?.length ?? 0;
-  const filledCount = completedGaps.size;
-  const strengthPercent = totalGaps > 0 ? Math.round(((totalGaps - activeGaps.length) / totalGaps) * 100) : 100;
-
-  const grouped = useMemo(() => groupGapsByCategory(activeGaps), [activeGaps]);
-
-  const getSmartDefault = useCallback((gap: ProfileGap): string => {
-    if (gap.category === 'medication' && gap.field_key === 'frequency' && gap.related_fact_value) {
-      const drugName = (gap.related_fact_value.drug_name as string) || '';
-      if (drugName) {
-        const defaults = inferMedicationDefaults(drugName);
-        return defaults.commonFrequencies[0] || '';
-      }
-    }
-    if (gap.category === 'medication' && gap.field_key === 'dose' && gap.related_fact_value) {
-      const drugName = (gap.related_fact_value.drug_name as string) || '';
-      if (drugName) {
-        const defaults = inferMedicationDefaults(drugName);
-        return defaults.commonDoses[0] || '';
-      }
-    }
-    return '';
-  }, []);
-
-  const handleSave = useCallback(async (gap: ProfileGap) => {
-    const value = fieldValues[gap.id]?.trim();
-    if (!value) {
-      Alert.alert('Required', 'Please enter a value');
-      return;
-    }
-
-    try {
-      if (gap.related_fact_id) {
-        await fillGap.mutateAsync({
-          factId: gap.related_fact_id,
-          fieldKey: gap.field_key,
-          value,
-        });
-      } else if (profileId) {
-        // General gap — create a new fact
-        const category = gap.field_key === 'emergency_contact' ? 'emergency_contact'
-          : gap.field_key === 'care_team' ? 'care_team'
-          : gap.field_key === 'pharmacy' ? 'pharmacy'
-          : gap.category;
-
-        const valueObj: Record<string, unknown> = {};
-        if (category === 'emergency_contact') {
-          valueObj.name = value;
-        } else if (category === 'care_team') {
-          valueObj.name = value;
-        } else if (category === 'pharmacy') {
-          valueObj.name = value;
-        } else {
-          valueObj.value = value;
-        }
-
-        await fillGeneral.mutateAsync({
-          profileId,
-          category,
-          fieldKey: gap.field_key,
-          value: valueObj,
-        });
-      }
-
-      setCompletedGaps((prev) => new Set(prev).add(gap.id));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to save';
-      Alert.alert('Error', msg);
-    }
-  }, [fieldValues, fillGap, fillGeneral, profileId]);
-
-  const handleSkip = useCallback((gapId: string) => {
-    setCompletedGaps((prev) => new Set(prev).add(gapId));
-  }, []);
-
-  const handleAskCaregiver = useCallback(async () => {
+  const handleAskCaregiver = async () => {
     if (!activeCaregiver) return;
     const caregiverName =
       activeCaregiver.grantee_display_name?.trim() || 'there';
-    const gapSummary = (gaps ?? [])
-      .filter((g) => !completedGaps.has(g.id))
-      .slice(0, 5)
-      .map((g) => `• ${g.prompt_text}`)
-      .join('\n');
-    const message =
-      `Hey ${caregiverName}, can you help update my health profile on CareLead? ` +
-      (gapSummary
-        ? `Here are some things that need adding:\n${gapSummary}`
-        : 'A few things still need filling in.');
+    const topThree = nonMilestoneNudges.slice(0, 3).map((n) => `• ${n.title}`).join('\n');
+    const message = topThree
+      ? `Hey ${caregiverName}, can you help update my health profile on CareLead?\n${topThree}`
+      : `Hey ${caregiverName}, can you help keep my health profile up to date?`;
     try {
       await Share.share({ message });
     } catch {
       // user cancelled
     }
-  }, [activeCaregiver, gaps, completedGaps]);
+  };
 
-  if (isLoading) return <ScreenLayout loading />;
-  if (error) return <ScreenLayout error={error as Error} />;
-
-  if (activeGaps.length === 0) {
-    return (
-      <ScreenLayout>
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyIcon}>✓</Text>
-          <Text style={styles.emptyTitle}>Your profile is looking great!</Text>
-          <Text style={styles.emptySubtitle}>
-            CareLead has everything it needs to work well for you.
-          </Text>
-          <TouchableOpacity
-            style={styles.backBtn}
-            onPress={() => router.back()}
-          >
-            <Text style={styles.backBtnText}>Back to Profile</Text>
-          </TouchableOpacity>
-        </View>
-      </ScreenLayout>
-    );
-  }
+  const progressPct =
+    tierInfo.nextThreshold
+      ? Math.min(100, Math.round((totalFacts / tierInfo.nextThreshold) * 100))
+      : 100;
 
   return (
     <ScreenLayout>
-      {/* Progress indicator */}
-      <View style={styles.progressContainer}>
-        <View style={styles.progressBar}>
-          <View
-            style={[styles.progressFill, { width: `${strengthPercent}%` }]}
+      {/* Tier visualization */}
+      <View style={styles.tierCard}>
+        <View style={styles.tierIconWrap}>
+          <Ionicons
+            name={tierInfo.icon as keyof typeof Ionicons.glyphMap}
+            size={32}
+            color={COLORS.secondary.dark}
           />
         </View>
-        <Text style={styles.progressText}>
-          Profile strength: {strengthPercent}%
-        </Text>
-        {filledCount > 0 && (
-          <Text style={styles.progressDetail}>
-            {filledCount} item{filledCount === 1 ? '' : 's'} completed this session
+        <View style={styles.tierBody}>
+          <Text style={styles.tierLabel}>{tierInfo.label}</Text>
+          <Text style={styles.tierFactCount}>
+            {totalFacts} health fact{totalFacts === 1 ? '' : 's'} tracked
           </Text>
-        )}
+          <View style={styles.progressBar}>
+            <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
+          </View>
+          {tierInfo.remaining !== null && tierInfo.nextTier ? (
+            <Text style={styles.tierNext}>
+              {tierInfo.remaining} more item{tierInfo.remaining === 1 ? '' : 's'} to reach '
+              {tierInfo.nextTier === 'growing'
+                ? 'Growing'
+                : tierInfo.nextTier === 'strong'
+                ? 'Strong'
+                : 'Comprehensive'}
+              '
+            </Text>
+          ) : (
+            <Text style={styles.tierNext}>
+              You've reached the top tier — keep it current.
+            </Text>
+          )}
+        </View>
       </View>
 
-      {activeCaregiver && (
+      {/* Suggested next steps */}
+      {nonMilestoneNudges.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>SUGGESTED NEXT STEPS</Text>
+          <View style={styles.nudgeList}>
+            {nonMilestoneNudges.map((nudge) => (
+              <SmartNudgeCard
+                key={nudge.id}
+                nudge={nudge}
+                profileId={profileId}
+                onDismiss={() => dismiss(nudge.id)}
+              />
+            ))}
+          </View>
+        </View>
+      )}
+
+      {/* Milestone earned this visit */}
+      {milestoneNudges.length > 0 && (
+        <View style={styles.section}>
+          {milestoneNudges.map((m) => (
+            <MilestoneBadgeCard
+              key={m.id}
+              title={m.title}
+              detail={m.detail}
+              icon={m.icon}
+            />
+          ))}
+        </View>
+      )}
+
+      {/* Earned milestones summary */}
+      {earnedMilestones.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>MILESTONES EARNED</Text>
+          <View style={styles.milestoneGrid}>
+            {earnedMilestones.map((id) => {
+              const meta = getMilestone(id);
+              if (!meta) return null;
+              return (
+                <View key={id} style={styles.milestoneSmall}>
+                  <Ionicons
+                    name={meta.icon as keyof typeof Ionicons.glyphMap}
+                    size={18}
+                    color={COLORS.success.DEFAULT}
+                  />
+                  <Text style={styles.milestoneSmallText} numberOfLines={2}>
+                    {meta.title}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      )}
+
+      {/* Quick-access batch flows */}
+      <View style={styles.section}>
         <TouchableOpacity
-          style={styles.askCaregiverCard}
-          activeOpacity={0.7}
-          onPress={handleAskCaregiver}
+          style={styles.bigAction}
+          activeOpacity={0.75}
+          onPress={() => router.push('/(main)/capture/import-summary')}
         >
-          <View style={styles.askCaregiverIconWrap}>
+          <View style={styles.bigActionIconWrap}>
             <Ionicons
-              name="people-outline"
-              size={20}
+              name="cloud-download-outline"
+              size={22}
               color={COLORS.primary.DEFAULT}
             />
           </View>
-          <View style={styles.askCaregiverBody}>
-            <Text style={styles.askCaregiverTitle}>
-              Ask {activeCaregiver.grantee_display_name?.trim() || 'your caregiver'} to help?
-            </Text>
-            <Text style={styles.askCaregiverDetail}>
-              They can add medications and documents for you.
+          <View style={styles.bigActionBody}>
+            <View style={styles.bigActionTitleRow}>
+              <Text style={styles.bigActionTitle}>Import health summary</Text>
+              <View style={styles.highImpactBadge}>
+                <Text style={styles.highImpactBadgeText}>High impact</Text>
+              </View>
+            </View>
+            <Text style={styles.bigActionDetail}>
+              One file from your portal can fill most of your profile at once.
             </Text>
           </View>
           <Ionicons
-            name="share-outline"
+            name="chevron-forward"
             size={18}
             color={COLORS.primary.DEFAULT}
           />
         </TouchableOpacity>
-      )}
 
-      {/* Gap cards grouped by category */}
-      {Object.entries(grouped).map(([cat, catGaps]) => (
-        <View key={cat} style={styles.categorySection}>
-          <View style={styles.categoryHeader}>
-            <Text style={styles.categoryIcon}>
-              {CATEGORY_ICONS[cat] || '📋'}
-            </Text>
-            <Text style={styles.categoryLabel}>{categoryLabel(cat)}</Text>
-            <Text style={styles.categoryCount}>{catGaps.length}</Text>
+        <TouchableOpacity
+          style={[styles.bigAction, styles.bigActionSecondary]}
+          activeOpacity={0.75}
+          onPress={() => router.push('/(main)/capture/catch-up')}
+        >
+          <View
+            style={[
+              styles.bigActionIconWrap,
+              { backgroundColor: COLORS.secondary.DEFAULT + '22' },
+            ]}
+          >
+            <Ionicons
+              name="albums-outline"
+              size={22}
+              color={COLORS.secondary.dark}
+            />
           </View>
+          <View style={styles.bigActionBody}>
+            <Text style={styles.bigActionTitle}>Catch Up flow</Text>
+            <Text style={styles.bigActionDetail}>
+              Snap photos of bottles, cards, and documents to fill gaps fast.
+            </Text>
+          </View>
+          <Ionicons
+            name="chevron-forward"
+            size={18}
+            color={COLORS.secondary.dark}
+          />
+        </TouchableOpacity>
 
-          {catGaps.map((gap) => {
-            const smartDefault = getSmartDefault(gap);
-            const currentValue = fieldValues[gap.id] ?? smartDefault;
+        {activeCaregiver && (
+          <TouchableOpacity
+            style={[styles.bigAction, styles.bigActionSecondary]}
+            activeOpacity={0.75}
+            onPress={handleAskCaregiver}
+          >
+            <View
+              style={[
+                styles.bigActionIconWrap,
+                { backgroundColor: COLORS.primary.DEFAULT + '14' },
+              ]}
+            >
+              <Ionicons
+                name="people-outline"
+                size={22}
+                color={COLORS.primary.DEFAULT}
+              />
+            </View>
+            <View style={styles.bigActionBody}>
+              <Text style={styles.bigActionTitle}>
+                Ask {activeCaregiver.grantee_display_name?.trim() || 'your caregiver'} to help
+              </Text>
+              <Text style={styles.bigActionDetail}>
+                Share your top gaps so they can add them for you.
+              </Text>
+            </View>
+            <Ionicons
+              name="share-outline"
+              size={18}
+              color={COLORS.primary.DEFAULT}
+            />
+          </TouchableOpacity>
+        )}
+      </View>
 
-            return (
-              <View key={gap.id} style={styles.gapCard}>
-                <View style={styles.gapPriorityDot}>
-                  <View
-                    style={[
-                      styles.priorityDot,
-                      gap.priority === 'high' && styles.priorityHigh,
-                      gap.priority === 'medium' && styles.priorityMedium,
-                      gap.priority === 'low' && styles.priorityLow,
-                    ]}
-                  />
+      {/* Category breakdown (collapsible) */}
+      <View style={styles.section}>
+        <TouchableOpacity
+          style={styles.breakdownHeader}
+          activeOpacity={0.75}
+          onPress={() => setCategoryExpanded((v) => !v)}
+        >
+          <Text style={styles.sectionTitle}>CATEGORY BREAKDOWN</Text>
+          <Ionicons
+            name={categoryExpanded ? 'chevron-up' : 'chevron-down'}
+            size={16}
+            color={COLORS.text.tertiary}
+          />
+        </TouchableOpacity>
+        {categoryExpanded && (
+          <View style={styles.breakdownList}>
+            {categoryBreakdown.map((cat) => (
+              <View key={cat.key} style={styles.breakdownRow}>
+                <Ionicons
+                  name={cat.icon as keyof typeof Ionicons.glyphMap}
+                  size={18}
+                  color={COLORS.text.secondary}
+                />
+                <View style={styles.breakdownBody}>
+                  <Text style={styles.breakdownLabel}>{cat.label}</Text>
+                  <Text style={styles.breakdownHint}>{cat.hint}</Text>
                 </View>
-
-                <Text style={styles.gapPrompt}>{gap.prompt_text}</Text>
-                <Text style={styles.gapImpact}>{gap.impact_text}</Text>
-
-                {/* Frequency picker for medication frequency gaps */}
-                {gap.category === 'medication' && gap.field_key === 'frequency' ? (
-                  <View style={styles.optionsRow}>
-                    {FREQUENCY_OPTIONS.slice(0, 5).map((opt) => (
-                      <TouchableOpacity
-                        key={opt.value}
-                        style={[
-                          styles.optionChip,
-                          currentValue === opt.value && styles.optionChipActive,
-                        ]}
-                        onPress={() =>
-                          setFieldValues((prev) => ({
-                            ...prev,
-                            [gap.id]: opt.value,
-                          }))
-                        }
-                      >
-                        <Text
-                          style={[
-                            styles.optionChipText,
-                            currentValue === opt.value &&
-                              styles.optionChipTextActive,
-                          ]}
-                        >
-                          {opt.label}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                ) : gap.category === 'allergy' && gap.field_key === 'severity' ? (
-                  <View style={styles.optionsRow}>
-                    {['mild', 'moderate', 'severe'].map((opt) => (
-                      <TouchableOpacity
-                        key={opt}
-                        style={[
-                          styles.optionChip,
-                          currentValue === opt && styles.optionChipActive,
-                        ]}
-                        onPress={() =>
-                          setFieldValues((prev) => ({
-                            ...prev,
-                            [gap.id]: opt,
-                          }))
-                        }
-                      >
-                        <Text
-                          style={[
-                            styles.optionChipText,
-                            currentValue === opt && styles.optionChipTextActive,
-                          ]}
-                        >
-                          {opt.charAt(0).toUpperCase() + opt.slice(1)}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                ) : (
-                  <TextInput
-                    style={styles.gapInput}
-                    placeholder={smartDefault || 'Enter value...'}
-                    placeholderTextColor={COLORS.text.tertiary}
-                    value={currentValue}
-                    onChangeText={(v) =>
-                      setFieldValues((prev) => ({ ...prev, [gap.id]: v }))
-                    }
-                  />
-                )}
-
-                <View style={styles.gapActions}>
-                  <TouchableOpacity
-                    style={styles.saveBtn}
-                    onPress={() => handleSave(gap)}
-                    disabled={fillGap.isPending || fillGeneral.isPending}
-                  >
-                    <Text style={styles.saveBtnText}>Save</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => handleSkip(gap.id)}>
-                    <Text style={styles.skipText}>Skip</Text>
-                  </TouchableOpacity>
-                </View>
+                <Ionicons
+                  name={healthIcon(cat.health)}
+                  size={20}
+                  color={healthColor(cat.health)}
+                />
               </View>
-            );
-          })}
+            ))}
+          </View>
+        )}
+      </View>
+
+      {nonMilestoneNudges.length === 0 && milestoneNudges.length === 0 && (
+        <View style={styles.emptyContainer}>
+          <Ionicons
+            name="checkmark-circle"
+            size={48}
+            color={COLORS.success.DEFAULT}
+          />
+          <Text style={styles.emptyTitle}>Your profile is in great shape</Text>
+          <Text style={styles.emptySubtitle}>
+            Nothing urgent right now. CareLead will let you know when there's
+            something helpful to add.
+          </Text>
         </View>
-      ))}
+      )}
     </ScreenLayout>
   );
 }
 
 const styles = StyleSheet.create({
-  progressContainer: {
-    marginBottom: 20,
-  },
-  progressBar: {
-    height: 8,
-    backgroundColor: COLORS.border.light,
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginBottom: 8,
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: COLORS.success.DEFAULT,
-    borderRadius: 4,
-  },
-  progressText: {
-    fontSize: FONT_SIZES.sm,
-    fontWeight: FONT_WEIGHTS.semibold,
-    color: COLORS.text.DEFAULT,
-  },
-  progressDetail: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.text.secondary,
-    marginTop: 2,
-  },
-
-  askCaregiverCard: {
+  tierCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    padding: 14,
-    marginBottom: 20,
-    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    gap: 14,
+    padding: 16,
+    marginBottom: 22,
+    backgroundColor: COLORS.secondary.DEFAULT + '14',
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: COLORS.primary.DEFAULT + '20',
+    borderColor: COLORS.secondary.DEFAULT + '33',
   },
-  askCaregiverIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: COLORS.primary.DEFAULT + '14',
+  tierIconWrap: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  askCaregiverBody: {
+  tierBody: {
     flex: 1,
   },
-  askCaregiverTitle: {
-    fontSize: FONT_SIZES.sm,
-    fontWeight: FONT_WEIGHTS.semibold,
+  tierLabel: {
+    fontSize: FONT_SIZES.lg,
+    fontWeight: FONT_WEIGHTS.bold,
     color: COLORS.text.DEFAULT,
   },
-  askCaregiverDetail: {
+  tierFactCount: {
     fontSize: FONT_SIZES.xs,
     color: COLORS.text.secondary,
     marginTop: 2,
-    lineHeight: 17,
   },
-
-  categorySection: {
+  progressBar: {
+    height: 6,
+    backgroundColor: COLORS.border.light,
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginTop: 10,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: COLORS.secondary.dark,
+    borderRadius: 3,
+  },
+  tierNext: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    marginTop: 6,
+  },
+  section: {
     marginBottom: 24,
   },
-  categoryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  categoryIcon: {
-    fontSize: 18,
-    marginRight: 8,
-  },
-  categoryLabel: {
-    fontSize: FONT_SIZES.base,
+  sectionTitle: {
+    fontSize: 13,
     fontWeight: FONT_WEIGHTS.semibold,
-    color: COLORS.text.DEFAULT,
-    flex: 1,
-  },
-  categoryCount: {
-    fontSize: FONT_SIZES.sm,
     color: COLORS.text.tertiary,
-    fontWeight: FONT_WEIGHTS.medium,
-  },
-
-  gapCard: {
-    backgroundColor: COLORS.surface.DEFAULT,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: COLORS.border.light,
-  },
-  gapPriorityDot: {
-    position: 'absolute',
-    top: 16,
-    right: 16,
-  },
-  priorityDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  priorityHigh: {
-    backgroundColor: COLORS.error.DEFAULT,
-  },
-  priorityMedium: {
-    backgroundColor: COLORS.warning.DEFAULT,
-  },
-  priorityLow: {
-    backgroundColor: COLORS.text.tertiary,
-  },
-  gapPrompt: {
-    fontSize: FONT_SIZES.base,
-    color: COLORS.text.DEFAULT,
-    fontWeight: FONT_WEIGHTS.medium,
-    marginBottom: 4,
-    paddingRight: 24,
-  },
-  gapImpact: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.secondary.DEFAULT,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
     marginBottom: 12,
   },
-  gapInput: {
-    borderWidth: 1,
-    borderColor: COLORS.border.dark,
-    borderRadius: 8,
-    padding: 10,
-    fontSize: FONT_SIZES.base,
-    color: COLORS.text.DEFAULT,
-    backgroundColor: COLORS.surface.muted,
+  nudgeList: {
+    gap: 10,
   },
-  optionsRow: {
+  milestoneGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
   },
-  optionChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: COLORS.border.dark,
-    backgroundColor: COLORS.surface.muted,
-  },
-  optionChipActive: {
-    borderColor: COLORS.primary.DEFAULT,
-    backgroundColor: COLORS.primary.DEFAULT,
-  },
-  optionChipText: {
-    fontSize: FONT_SIZES.xs,
-    color: COLORS.text.secondary,
-  },
-  optionChipTextActive: {
-    color: COLORS.text.inverse,
-  },
-  gapActions: {
+  milestoneSmall: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
-    marginTop: 12,
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: COLORS.success.light,
+    borderRadius: 999,
   },
-  saveBtn: {
-    backgroundColor: COLORS.primary.DEFAULT,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  saveBtnText: {
-    color: COLORS.text.inverse,
-    fontSize: FONT_SIZES.sm,
+  milestoneSmallText: {
+    fontSize: 12,
+    color: COLORS.success.DEFAULT,
     fontWeight: FONT_WEIGHTS.semibold,
   },
-  skipText: {
-    fontSize: FONT_SIZES.sm,
-    color: COLORS.text.tertiary,
+  bigAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    marginBottom: 10,
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '33',
   },
-
-  emptyContainer: {
-    flex: 1,
+  bigActionSecondary: {
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderColor: COLORS.border.DEFAULT,
+  },
+  bigActionIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: COLORS.primary.DEFAULT + '22',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 32,
-    minHeight: 300,
   },
-  emptyIcon: {
-    fontSize: 56,
-    color: COLORS.success.DEFAULT,
-    marginBottom: 16,
+  bigActionBody: { flex: 1 },
+  bigActionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  bigActionTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  highImpactBadge: {
+    backgroundColor: COLORS.accent.DEFAULT + '33',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  highImpactBadgeText: {
+    fontSize: 10,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.accent.dark,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  bigActionDetail: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  breakdownHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  breakdownList: {
+    backgroundColor: COLORS.surface.DEFAULT,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border.light,
+    overflow: 'hidden',
+  },
+  breakdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border.light,
+  },
+  breakdownBody: {
+    flex: 1,
+  },
+  breakdownLabel: {
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  breakdownHint: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    marginTop: 2,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    gap: 10,
   },
   emptyTitle: {
-    fontSize: FONT_SIZES.xl,
+    fontSize: FONT_SIZES.lg,
     fontWeight: FONT_WEIGHTS.bold,
     color: COLORS.text.DEFAULT,
-    marginBottom: 8,
     textAlign: 'center',
   },
   emptySubtitle: {
-    fontSize: FONT_SIZES.base,
+    fontSize: FONT_SIZES.sm,
     color: COLORS.text.secondary,
     textAlign: 'center',
-    marginBottom: 24,
-  },
-  backBtn: {
-    backgroundColor: COLORS.primary.DEFAULT,
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 12,
-  },
-  backBtnText: {
-    color: COLORS.text.inverse,
-    fontSize: FONT_SIZES.base,
-    fontWeight: FONT_WEIGHTS.semibold,
+    paddingHorizontal: 16,
   },
 });

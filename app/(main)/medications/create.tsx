@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { Input } from '@/components/ui/Input';
 import { DatePicker } from '@/components/ui/DatePicker';
 import { Button } from '@/components/ui/Button';
@@ -404,6 +405,30 @@ export default function CreateMedicationScreen() {
           </View>
 
           <View style={styles.flex}>
+            {/* Snap a Label shortcut — camera-based quick entry */}
+            <TouchableOpacity
+              style={styles.snapLabelCard}
+              activeOpacity={0.7}
+              onPress={() => router.push('/(main)/medications/snap-label')}
+            >
+              <View style={styles.snapLabelIconWrap}>
+                <Ionicons name="camera-outline" size={22} color={COLORS.primary.DEFAULT} />
+              </View>
+              <View style={styles.snapLabelBody}>
+                <Text style={styles.snapLabelTitle}>Snap a Label</Text>
+                <Text style={styles.snapLabelDetail}>
+                  Take a photo of your medication bottle
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={COLORS.text.tertiary} />
+            </TouchableOpacity>
+
+            <View style={styles.orDivider}>
+              <View style={styles.orLine} />
+              <Text style={styles.orText}>or describe it</Text>
+              <View style={styles.orLine} />
+            </View>
+
             {/* Text area */}
             <View style={styles.inputWrapper}>
               {hasText && (
@@ -801,6 +826,55 @@ const styles = StyleSheet.create({
     color: COLORS.text.secondary,
     marginTop: 4,
     lineHeight: 20,
+  },
+  // Snap a Label shortcut
+  snapLabelCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: 24,
+    padding: 14,
+    backgroundColor: COLORS.primary.DEFAULT + '0D',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '20',
+  },
+  snapLabelIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  snapLabelBody: { flex: 1 },
+  snapLabelTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  snapLabelDetail: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+    marginTop: 2,
+  },
+  orDivider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 24,
+    marginVertical: 14,
+  },
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: COLORS.border.light,
+  },
+  orText: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.tertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   },
   // Free text input step
   inputWrapper: {
