@@ -887,6 +887,27 @@ export function MedicationCard({ medication, onPress }: MedicationCardProps) {
 - Edge Functions minimize data sent to AI providers — only send what's needed
 - AI provider responses are not logged in full — only non-PHI metadata (model, latency, token count, status)
 
+### Notifications (PHI Rules)
+- **Never include PHI in notification content.** Push and local notifications appear on lock screens, in notification trays, on paired watches, and may be captured by OS analytics — all outside our controlled zone.
+- Route every scheduled notification through `services/notifications.ts` — use `sanitizeNotificationContent()` or `genericNotification()` to ensure safe content.
+- Forbidden in notification title/body: patient names (including "Mom", "Dad"), medication names/doses, lab values, provider names, facility names, diagnoses, allergy details, bill amounts, insurance plan names, appointment types.
+- Use category-specific generic templates: "You have a medication reminder", "You have an upcoming appointment", "A new result is available", "A billing update is available".
+- Deep-link data (e.g., `taskId`) is attached via notification `data` payload — safe because it is opaque and only opened after the user taps through to the authenticated app.
+
+### App Lock (Biometrics, PIN, Session)
+- **Biometric lock** (Face ID / Touch ID) is the primary unlock path — configured via `services/biometric.ts` + `app/(auth)/app-lock.tsx`.
+- **PIN fallback** — devices without biometrics can set a 4-digit PIN stored as SHA-256(pin + user_id salt) in SecureStore. Max 5 attempts, then forced sign-out.
+- **Auto-lock** re-prompts for biometric/PIN after backgrounding (30s / 1min / 5min / never).
+- **Session expiry** — configurable full re-authentication window (24h / 7d / 30d, default 7d) stored in SecureStore and enforced in AuthGate.
+- **Sign-out cleanup** — every sign-out path must call `cleanupOnSignOut()` in `services/auth.ts` (clears SecureStore, Zustand stores, TanStack Query cache, pending invite tokens, scheduled notifications).
+- **App switcher privacy overlay** — a full-screen brand overlay replaces app content whenever `AppState !== 'active'`, preventing PHI leakage in the iOS app switcher.
+
+### Audit Logging
+- Auth/session events write to `security_audit_log` via `services/securityAudit.ts` — fire-and-forget; UI never blocks on audit writes.
+- Stored per-event: `event_type`, `user_id`, generic `device_info` (platform only), non-PHI `detail`, `created_at`.
+- **Never log to this table**: IP addresses, device IDs/models, names, phone numbers, email addresses, or any health data.
+- RLS: users can only insert their own events (or anonymous for pre-session events like `otp_requested`). No user-facing reads — service role only.
+
 ---
 
 ## Error Handling

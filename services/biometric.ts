@@ -1,5 +1,6 @@
 import * as LocalAuthentication from 'expo-local-authentication';
 import * as SecureStore from 'expo-secure-store';
+import * as Crypto from 'expo-crypto';
 import { Platform } from 'react-native';
 
 const KEY_ENABLED = 'carelead_biometric_enabled';
@@ -7,11 +8,19 @@ const KEY_USER_ID = 'carelead_biometric_user_id';
 const KEY_AUTO_LOCK = 'carelead_auto_lock_seconds';
 const KEY_LAST_BG = 'carelead_last_background_ts';
 const KEY_PROMPTED_USER_ID = 'carelead_biometric_prompted_user_id';
+const KEY_PIN_HASH = 'carelead_pin_hash';
+const KEY_PIN_USER_ID = 'carelead_pin_user_id';
+const KEY_PIN_ATTEMPTS = 'carelead_pin_attempts';
+const KEY_SESSION_DURATION = 'carelead_session_duration';
+const KEY_SESSION_STARTED_AT = 'carelead_session_started_at';
 
 export type AutoLockSetting = '30' | '60' | '300' | 'never';
 export type BiometricKind = 'face' | 'fingerprint' | 'iris' | 'generic';
+export type SessionDuration = '24h' | '7d' | '30d';
 
 export const DEFAULT_AUTO_LOCK: AutoLockSetting = '30';
+export const DEFAULT_SESSION_DURATION: SessionDuration = '7d';
+export const MAX_PIN_ATTEMPTS = 5;
 
 async function getItem(key: string): Promise<string | null> {
   if (Platform.OS === 'web') return null;
@@ -201,4 +210,145 @@ export function autoLockLabel(value: AutoLockSetting): string {
     case 'never':
       return 'Never';
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// PIN (fallback lock mechanism for devices without biometrics)
+// ─────────────────────────────────────────────────────────────────────────
+
+async function hashPin(pin: string, userId: string): Promise<string> {
+  // SHA-256 of (pin + userId as salt). Per-user salt avoids rainbow-table
+  // reuse across different users on the same device.
+  return Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    `${pin}:${userId}`,
+  );
+}
+
+export async function isPinSetForUser(userId: string): Promise<boolean> {
+  const [hash, savedUserId] = await Promise.all([
+    getItem(KEY_PIN_HASH),
+    getItem(KEY_PIN_USER_ID),
+  ]);
+  return !!hash && savedUserId === userId;
+}
+
+export async function hasAnyPin(): Promise<boolean> {
+  const hash = await getItem(KEY_PIN_HASH);
+  return !!hash;
+}
+
+export async function setPinForUser(userId: string, pin: string): Promise<void> {
+  const hash = await hashPin(pin, userId);
+  await Promise.all([
+    setItem(KEY_PIN_HASH, hash),
+    setItem(KEY_PIN_USER_ID, userId),
+    setItem(KEY_PIN_ATTEMPTS, '0'),
+  ]);
+}
+
+export async function verifyPin(userId: string, pin: string): Promise<boolean> {
+  const [storedHash, storedUserId] = await Promise.all([
+    getItem(KEY_PIN_HASH),
+    getItem(KEY_PIN_USER_ID),
+  ]);
+  if (!storedHash || storedUserId !== userId) return false;
+  const candidate = await hashPin(pin, userId);
+  return candidate === storedHash;
+}
+
+export async function clearPin(): Promise<void> {
+  await Promise.all([
+    removeItem(KEY_PIN_HASH),
+    removeItem(KEY_PIN_USER_ID),
+    removeItem(KEY_PIN_ATTEMPTS),
+  ]);
+}
+
+export async function getPinAttempts(): Promise<number> {
+  const raw = await getItem(KEY_PIN_ATTEMPTS);
+  if (!raw) return 0;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+export async function incrementPinAttempts(): Promise<number> {
+  const current = await getPinAttempts();
+  const next = current + 1;
+  await setItem(KEY_PIN_ATTEMPTS, next.toString());
+  return next;
+}
+
+export async function resetPinAttempts(): Promise<void> {
+  await setItem(KEY_PIN_ATTEMPTS, '0');
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Session duration / expiry
+// ─────────────────────────────────────────────────────────────────────────
+
+export async function getSessionDuration(): Promise<SessionDuration> {
+  const value = await getItem(KEY_SESSION_DURATION);
+  if (value === '24h' || value === '7d' || value === '30d') return value;
+  return DEFAULT_SESSION_DURATION;
+}
+
+export async function setSessionDuration(value: SessionDuration): Promise<void> {
+  await setItem(KEY_SESSION_DURATION, value);
+}
+
+export function sessionDurationLabel(value: SessionDuration): string {
+  switch (value) {
+    case '24h':
+      return '24 hours';
+    case '7d':
+      return '7 days';
+    case '30d':
+      return '30 days';
+  }
+}
+
+export function sessionDurationMs(value: SessionDuration): number {
+  switch (value) {
+    case '24h':
+      return 24 * 60 * 60 * 1000;
+    case '7d':
+      return 7 * 24 * 60 * 60 * 1000;
+    case '30d':
+      return 30 * 24 * 60 * 60 * 1000;
+  }
+}
+
+export async function recordSessionStart(): Promise<void> {
+  await setItem(KEY_SESSION_STARTED_AT, Date.now().toString());
+}
+
+export async function getSessionStartedAt(): Promise<number | null> {
+  const raw = await getItem(KEY_SESSION_STARTED_AT);
+  if (!raw) return null;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export async function clearSessionStart(): Promise<void> {
+  await removeItem(KEY_SESSION_STARTED_AT);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Comprehensive cleanup — called on every sign-out path.
+// ─────────────────────────────────────────────────────────────────────────
+
+export async function clearAllSecurityPreferences(): Promise<void> {
+  await Promise.all([
+    removeItem(KEY_ENABLED),
+    removeItem(KEY_USER_ID),
+    removeItem(KEY_LAST_BG),
+    removeItem(KEY_PROMPTED_USER_ID),
+    removeItem(KEY_AUTO_LOCK),
+    removeItem(KEY_PIN_HASH),
+    removeItem(KEY_PIN_USER_ID),
+    removeItem(KEY_PIN_ATTEMPTS),
+    removeItem(KEY_SESSION_DURATION),
+    removeItem(KEY_SESSION_STARTED_AT),
+  ]);
 }

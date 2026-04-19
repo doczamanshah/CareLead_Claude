@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { bootstrapNewUser, resetPassword } from '@/services/auth';
+import { logAuthEvent } from '@/services/securityAudit';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { COLORS } from '@/lib/constants/colors';
@@ -46,11 +47,16 @@ export default function EmailAuthScreen() {
     }
     setLoading(true);
     setError(null);
-    const { error: authError } = await supabase.auth.signInWithPassword({
+    const { data, error: authError } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
     setLoading(false);
+    logAuthEvent({
+      eventType: 'sign_in_email',
+      userId: data?.user?.id ?? null,
+      detail: { success: !authError },
+    });
     if (authError) setError(authError.message);
   }
 
@@ -78,12 +84,22 @@ export default function EmailAuthScreen() {
     });
 
     if (authError) {
+      logAuthEvent({
+        eventType: 'sign_up_email',
+        userId: null,
+        detail: { success: false },
+      });
       setLoading(false);
       setError(authError.message);
       return;
     }
 
     if (data.user) {
+      logAuthEvent({
+        eventType: 'sign_up_email',
+        userId: data.user.id,
+        detail: { success: true },
+      });
       const result = await bootstrapNewUser(data.user.id, name.trim());
       if (!result.success) {
         setLoading(false);
@@ -111,6 +127,12 @@ export default function EmailAuthScreen() {
     setError(null);
     const result = await resetPassword(email);
     setLoading(false);
+
+    logAuthEvent({
+      eventType: 'password_reset_requested',
+      userId: null,
+      detail: { success: result.success },
+    });
 
     if (!result.success) {
       setError(result.error);

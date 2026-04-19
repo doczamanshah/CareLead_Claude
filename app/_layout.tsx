@@ -1,24 +1,32 @@
-import { useEffect, useRef } from 'react';
-import { AppState, AppStateStatus } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AppState, AppStateStatus, View, Image, StyleSheet, Text } from 'react-native';
 import * as Linking from 'expo-linking';
 import { Slot, useRouter, useSegments } from 'expo-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { COLORS } from '@/lib/constants/colors';
+import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { useProfileStore } from '@/stores/profileStore';
 import { useLockStore } from '@/stores/lockStore';
 import { fetchUserProfiles } from '@/services/profiles';
-import { bootstrapNewUser, userHasHousehold } from '@/services/auth';
+import { bootstrapNewUser, cleanupOnSignOut, userHasHousehold } from '@/services/auth';
 import {
   clearBiometricPreferences,
   clearBackgroundTimestamp,
   getAutoLockSetting,
   getBackgroundTimestamp,
   isBiometricEnabledForUser,
+  isPinSetForUser,
   recordBackgroundTimestamp,
   shouldLockAfterBackground,
+  getSessionDuration,
+  getSessionStartedAt,
+  recordSessionStart,
+  sessionDurationMs,
 } from '@/services/biometric';
+import { logAuthEvent } from '@/services/securityAudit';
 import { LoadingSpinner } from '@/components/ui/LoadingSpinner';
 import {
   requestNotificationPermissions,
@@ -51,8 +59,12 @@ function AuthGate() {
   } = useLockStore();
   const segments = useSegments();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const notificationListenerRef = useRef<ReturnType<typeof addNotificationResponseListener> | null>(null);
   const previousUserIdRef = useRef<string | null>(null);
+  const [appStateVisible, setAppStateVisible] = useState<AppStateStatus>(
+    AppState.currentState,
+  );
 
   // Request notification permissions and set up listener
   useEffect(() => {
@@ -118,7 +130,7 @@ function AuthGate() {
   // Listen for auth state changes
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+      async (event, session) => {
         const prevUserId = previousUserIdRef.current;
         const nextUserId = session?.user?.id ?? null;
 
@@ -128,6 +140,19 @@ function AuthGate() {
           // If this is a different user than before, clear biometric prefs tied to the old user
           if (prevUserId && prevUserId !== nextUserId) {
             await clearBiometricPreferences();
+          }
+
+          // Session bookkeeping: record start for new sessions, audit refreshes.
+          if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+            const existingStart = await getSessionStartedAt();
+            if (!existingStart) {
+              await recordSessionStart();
+            }
+          } else if (event === 'TOKEN_REFRESHED') {
+            logAuthEvent({
+              eventType: 'session_refreshed',
+              userId: session.user.id,
+            });
           }
 
           // Ensure user has a household (handles sign-in after email confirmation)
@@ -158,7 +183,41 @@ function AuthGate() {
     );
 
     return () => subscription.unsubscribe();
-  }, [setSession, setLoading, setProfiles]);
+  }, [setSession, setLoading, setProfiles, queryClient]);
+
+  // Session expiry enforcement: when a session loads, check how long it's
+  // been since it started. If past the configured duration, sign the user
+  // out and make them re-authenticate.
+  useEffect(() => {
+    if (isLoading) return;
+    if (!session?.user) return;
+
+    let cancelled = false;
+    (async () => {
+      const startedAt = await getSessionStartedAt();
+      if (!startedAt) return;
+      const duration = await getSessionDuration();
+      const elapsed = Date.now() - startedAt;
+      if (elapsed < sessionDurationMs(duration)) return;
+      if (cancelled) return;
+
+      logAuthEvent({
+        eventType: 'session_expired',
+        userId: session.user.id,
+        detail: { duration, elapsed_hours: Math.round(elapsed / 3600000) },
+      });
+      await cleanupOnSignOut({
+        queryClient,
+        logAudit: false,
+        reason: 'session_expired',
+      });
+      router.replace('/(auth)');
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoading, session, queryClient, router]);
 
   // Cold-start lock evaluation: once session loads, check if biometric is enabled
   useEffect(() => {
@@ -169,8 +228,11 @@ function AuthGate() {
       return;
     }
     (async () => {
-      const enabled = await isBiometricEnabledForUser(session.user.id);
-      if (enabled) {
+      const [bioEnabled, pinEnabled] = await Promise.all([
+        isBiometricEnabledForUser(session.user.id),
+        isPinSetForUser(session.user.id),
+      ]);
+      if (bioEnabled || pinEnabled) {
         lock();
       }
       await clearBackgroundTimestamp();
@@ -178,9 +240,12 @@ function AuthGate() {
     })();
   }, [isLoading, session, hasEvaluatedColdStart, lock, markColdStartEvaluated]);
 
-  // AppState listener: record background time, lock on foreground if threshold exceeded
+  // AppState listener: record background time, lock on foreground if threshold exceeded,
+  // and track current state for the privacy overlay (hides screen in app switcher).
   useEffect(() => {
     const handleChange = async (next: AppStateStatus) => {
+      setAppStateVisible(next);
+
       if (next === 'background') {
         await recordBackgroundTimestamp();
         return;
@@ -190,8 +255,11 @@ function AuthGate() {
         if (!currentSession?.user) return;
         if (useLockStore.getState().isLocked) return;
 
-        const enabled = await isBiometricEnabledForUser(currentSession.user.id);
-        if (!enabled) {
+        const [bioEnabled, pinEnabled] = await Promise.all([
+          isBiometricEnabledForUser(currentSession.user.id),
+          isPinSetForUser(currentSession.user.id),
+        ]);
+        if (!bioEnabled && !pinEnabled) {
           await clearBackgroundTimestamp();
           return;
         }
@@ -302,12 +370,79 @@ function AuthGate() {
     };
   }, [session, isLoading, hasEvaluatedColdStart, isLocked, profilesLoaded, segments, router]);
 
-  if (isLoading || (session && !profilesLoaded) || !hasEvaluatedColdStart) {
-    return <LoadingSpinner message="Loading CareLead..." />;
-  }
+  const showContent =
+    !(isLoading || (session && !profilesLoaded) || !hasEvaluatedColdStart);
 
-  return <Slot />;
+  // Privacy overlay: hide app content whenever AppState is not 'active' so
+  // PHI can't be captured in the iOS app switcher.
+  const showPrivacyOverlay = appStateVisible !== 'active';
+
+  return (
+    <View style={styles.root}>
+      {showContent ? (
+        <Slot />
+      ) : (
+        <LoadingSpinner message="Loading CareLead..." />
+      )}
+      {showPrivacyOverlay ? <PrivacyOverlay /> : null}
+    </View>
+  );
 }
+
+function PrivacyOverlay() {
+  return (
+    <View style={styles.overlay} pointerEvents="none">
+      <View style={styles.overlayLogoWrap}>
+        <Image
+          source={require('../assets/icon.png')}
+          style={styles.overlayLogo}
+          resizeMode="contain"
+        />
+      </View>
+      <Text style={styles.overlayBrand}>CareLead</Text>
+      <Text style={styles.overlayTagline}>Your care. In your hands.</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
+  overlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: COLORS.background.DEFAULT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 9999,
+  },
+  overlayLogoWrap: {
+    width: 120,
+    height: 120,
+    borderRadius: 28,
+    backgroundColor: COLORS.primary.DEFAULT + '14',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 20,
+    overflow: 'hidden',
+  },
+  overlayLogo: {
+    width: 96,
+    height: 96,
+  },
+  overlayBrand: {
+    fontSize: 36,
+    fontWeight: FONT_WEIGHTS.bold,
+    color: COLORS.primary.DEFAULT,
+    marginBottom: 8,
+    letterSpacing: -0.5,
+  },
+  overlayTagline: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.secondary.dark,
+  },
+});
 
 export default function RootLayout() {
   return (

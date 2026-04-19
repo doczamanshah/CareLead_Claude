@@ -1,5 +1,13 @@
+import type { QueryClient } from '@tanstack/react-query';
 import { supabase } from '@/lib/supabase';
 import type { Session } from '@supabase/supabase-js';
+import { clearAllSecurityPreferences } from '@/services/biometric';
+import { logAuthEvent } from '@/services/securityAudit';
+import { clearPendingInviteToken } from '@/lib/utils/deepLinks';
+import { cancelAllReminders } from '@/lib/utils/notifications';
+import { useAuthStore } from '@/stores/authStore';
+import { useProfileStore } from '@/stores/profileStore';
+import { useLockStore } from '@/stores/lockStore';
 
 type ServiceResult<T> =
   | { success: true; data: T }
@@ -107,6 +115,65 @@ export async function resetPassword(
   }
 
   return { success: true, data: undefined };
+}
+
+interface CleanupOptions {
+  queryClient?: QueryClient;
+  logAudit?: boolean;
+  reason?: string;
+}
+
+/**
+ * Centralized sign-out cleanup. Every sign-out path must call this before
+ * (or as part of) calling `supabase.auth.signOut()`. It:
+ *   • Clears all SecureStore security preferences (biometrics, PIN, session,
+ *     auto-lock, invite tokens).
+ *   • Resets Zustand stores (auth, profile, lock).
+ *   • Clears the TanStack Query cache (if a QueryClient is provided).
+ *   • Cancels all scheduled notifications.
+ *   • Logs a sign_out audit event (unless disabled).
+ *   • Calls supabase.auth.signOut().
+ *
+ * Use `reason` to differentiate user-initiated vs forced sign-outs in audit
+ * logs (e.g., 'session_expired', 'pin_lockout').
+ */
+export async function cleanupOnSignOut(options: CleanupOptions = {}): Promise<void> {
+  const { queryClient, logAudit = true, reason } = options;
+  const userId = useAuthStore.getState().user?.id ?? null;
+
+  if (logAudit) {
+    logAuthEvent({
+      eventType: 'sign_out',
+      userId,
+      detail: reason ? { reason } : {},
+    });
+  }
+
+  try {
+    await cancelAllReminders();
+  } catch {
+    // Best-effort
+  }
+
+  await Promise.all([
+    clearAllSecurityPreferences(),
+    clearPendingInviteToken(),
+  ]);
+
+  try {
+    queryClient?.clear();
+  } catch {
+    // Best-effort
+  }
+
+  useProfileStore.getState().reset();
+  useLockStore.getState().reset();
+
+  try {
+    await supabase.auth.signOut();
+  } catch {
+    // Even if the server call fails, local state is already cleaned.
+  }
 }
 
 /**

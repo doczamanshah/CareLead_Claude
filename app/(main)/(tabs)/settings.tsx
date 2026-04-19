@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -8,27 +8,37 @@ import {
   Switch,
   ActivityIndicator,
 } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
-import { supabase } from '@/lib/supabase';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import { useCareGuidanceLevel, useWeeklyDigest } from '@/hooks/usePreferences';
 import { useAuthStore } from '@/stores/authStore';
 import {
   autoLockLabel,
+  clearPin,
   disableBiometric,
   enableBiometricForUser,
   getAutoLockSetting,
   getBiometricCapability,
+  getSessionDuration,
   isBiometricEnabledForUser,
+  isPinSetForUser,
   promptBiometric,
   setAutoLockSetting,
+  sessionDurationLabel,
+  setSessionDuration,
+  verifyPin,
   type AutoLockSetting,
   type BiometricCapability,
+  type SessionDuration,
 } from '@/services/biometric';
+import { cleanupOnSignOut } from '@/services/auth';
+import { logAuthEvent } from '@/services/securityAudit';
 import type { CareGuidanceLevel } from '@/services/commit';
 
 const GUIDANCE_OPTIONS: {
@@ -60,36 +70,62 @@ const AUTO_LOCK_OPTIONS: { key: AutoLockSetting; label: string }[] = [
   { key: 'never', label: 'Never' },
 ];
 
+const SESSION_DURATION_OPTIONS: { key: SessionDuration; label: string }[] = [
+  { key: '24h', label: '24 hours' },
+  { key: '7d', label: '7 days' },
+  { key: '30d', label: '30 days' },
+];
+
 export default function SettingsScreen() {
   const { level, setLevel, isUpdating } = useCareGuidanceLevel();
   const { enabled: weeklyDigestEnabled, setEnabled: setWeeklyDigest } = useWeeklyDigest();
   const user = useAuthStore((s) => s.user);
+  const router = useRouter();
+  const queryClient = useQueryClient();
 
   const [capability, setCapability] = useState<BiometricCapability | null>(null);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [biometricLoading, setBiometricLoading] = useState(true);
   const [biometricBusy, setBiometricBusy] = useState(false);
+  const [pinSet, setPinSet] = useState(false);
   const [autoLock, setAutoLock] = useState<AutoLockSetting>('30');
   const [showAutoLockOptions, setShowAutoLockOptions] = useState(false);
+  const [sessionDuration, setSessionDurationState] = useState<SessionDuration>('7d');
+  const [showSessionDurationOptions, setShowSessionDurationOptions] = useState(false);
+
+  const loadSecurityState = useCallback(async () => {
+    const [cap, enabled, lockSetting, pin, duration] = await Promise.all([
+      getBiometricCapability(),
+      user?.id ? isBiometricEnabledForUser(user.id) : Promise.resolve(false),
+      getAutoLockSetting(),
+      user?.id ? isPinSetForUser(user.id) : Promise.resolve(false),
+      getSessionDuration(),
+    ]);
+    setCapability(cap);
+    setBiometricEnabled(enabled);
+    setAutoLock(lockSetting);
+    setPinSet(pin);
+    setSessionDurationState(duration);
+    setBiometricLoading(false);
+  }, [user?.id]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [cap, enabled, lockSetting] = await Promise.all([
-        getBiometricCapability(),
-        user?.id ? isBiometricEnabledForUser(user.id) : Promise.resolve(false),
-        getAutoLockSetting(),
-      ]);
       if (cancelled) return;
-      setCapability(cap);
-      setBiometricEnabled(enabled);
-      setAutoLock(lockSetting);
-      setBiometricLoading(false);
+      await loadSecurityState();
     })();
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, [loadSecurityState]);
+
+  // Re-probe PIN state after the user returns from setup-pin screen.
+  useFocusEffect(
+    useCallback(() => {
+      loadSecurityState();
+    }, [loadSecurityState]),
+  );
 
   async function handleToggleBiometric(next: boolean) {
     if (!user?.id || biometricBusy || !capability) return;
@@ -132,11 +168,72 @@ export default function SettingsScreen() {
     await setAutoLockSetting(value);
   }
 
+  async function handlePickSessionDuration(value: SessionDuration) {
+    setSessionDurationState(value);
+    setShowSessionDurationOptions(false);
+    await setSessionDuration(value);
+  }
+
+  function handleSetPin() {
+    router.push('/(auth)/setup-pin');
+  }
+
+  function handleChangePin() {
+    router.push({ pathname: '/(auth)/setup-pin', params: { mode: 'change' } });
+  }
+
+  function promptForPin(
+    title: string,
+    message: string,
+    onVerified: () => void,
+  ) {
+    if (!user?.id) return;
+    Alert.prompt(
+      title,
+      message,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          onPress: async (pin?: string) => {
+            if (!pin) return;
+            const ok = await verifyPin(user.id, pin);
+            if (!ok) {
+              Alert.alert('Incorrect PIN', 'Please try again.');
+              return;
+            }
+            onVerified();
+          },
+        },
+      ],
+      'secure-text',
+    );
+  }
+
+  function handleRemovePin() {
+    if (!user?.id) return;
+    promptForPin(
+      'Remove PIN',
+      'Enter your current PIN to confirm removal.',
+      async () => {
+        await clearPin();
+        logAuthEvent({ eventType: 'pin_removed', userId: user.id });
+        setPinSet(false);
+      },
+    );
+  }
+
   async function handleSignOut() {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      Alert.alert('Error', error.message);
-    }
+    Alert.alert('Sign out?', 'You will need to sign in again.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: async () => {
+          await cleanupOnSignOut({ queryClient });
+        },
+      },
+    ]);
   }
 
   const securityAvailable = !!capability?.available && !!capability?.enrolled;
@@ -231,6 +328,128 @@ export default function SettingsScreen() {
             ) : null}
           </View>
         ) : null}
+
+        {/* PIN management */}
+        {!biometricLoading ? (
+          <View style={styles.pinWrap}>
+            {pinSet ? (
+              <>
+                <TouchableOpacity
+                  style={styles.autoLockRow}
+                  activeOpacity={0.7}
+                  onPress={handleChangePin}
+                >
+                  <View style={styles.autoLockContent}>
+                    <Text style={styles.autoLockLabel}>Change PIN</Text>
+                    <Text style={styles.autoLockValue}>
+                      Update your 4-digit unlock PIN
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={COLORS.text.tertiary}
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.autoLockRow, styles.pinRemoveRow]}
+                  activeOpacity={0.7}
+                  onPress={handleRemovePin}
+                >
+                  <View style={styles.autoLockContent}>
+                    <Text style={[styles.autoLockLabel, styles.pinRemoveLabel]}>
+                      Remove PIN
+                    </Text>
+                    <Text style={styles.autoLockValue}>
+                      Turn off PIN unlock
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={COLORS.text.tertiary}
+                  />
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity
+                style={styles.autoLockRow}
+                activeOpacity={0.7}
+                onPress={handleSetPin}
+              >
+                <View style={styles.autoLockContent}>
+                  <Text style={styles.autoLockLabel}>Set a PIN</Text>
+                  <Text style={styles.autoLockValue}>
+                    {securityAvailable
+                      ? `Backup unlock for when ${biometricLabel} isn't available`
+                      : 'Protect CareLead with a 4-digit PIN'}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={18}
+                  color={COLORS.text.tertiary}
+                />
+              </TouchableOpacity>
+            )}
+          </View>
+        ) : null}
+
+        {/* Session duration */}
+        <View style={styles.pinWrap}>
+          <TouchableOpacity
+            style={styles.autoLockRow}
+            activeOpacity={0.7}
+            onPress={() => setShowSessionDurationOptions((v) => !v)}
+          >
+            <View style={styles.autoLockContent}>
+              <Text style={styles.autoLockLabel}>Session Duration</Text>
+              <Text style={styles.autoLockValue}>
+                Sign in required every {sessionDurationLabel(sessionDuration)}
+              </Text>
+            </View>
+            <Ionicons
+              name={showSessionDurationOptions ? 'chevron-up' : 'chevron-down'}
+              size={20}
+              color={COLORS.text.tertiary}
+            />
+          </TouchableOpacity>
+
+          {showSessionDurationOptions ? (
+            <View style={styles.autoLockOptions}>
+              {SESSION_DURATION_OPTIONS.map((opt) => {
+                const selected = sessionDuration === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[
+                      styles.autoLockOption,
+                      selected && styles.autoLockOptionSelected,
+                    ]}
+                    onPress={() => handlePickSessionDuration(opt.key)}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.autoLockOptionText,
+                        selected && styles.autoLockOptionTextSelected,
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                    {selected ? (
+                      <Ionicons
+                        name="checkmark"
+                        size={18}
+                        color={COLORS.primary.DEFAULT}
+                      />
+                    ) : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
+        </View>
       </View>
 
       {/* Care Guidance Section */}
@@ -451,5 +670,14 @@ const styles = StyleSheet.create({
   autoLockOptionTextSelected: {
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.semibold,
+  },
+  pinWrap: {
+    marginTop: 8,
+  },
+  pinRemoveRow: {
+    marginTop: 8,
+  },
+  pinRemoveLabel: {
+    color: COLORS.error.DEFAULT,
   },
 });

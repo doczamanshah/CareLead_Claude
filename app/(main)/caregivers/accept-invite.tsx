@@ -6,6 +6,8 @@ import { ScreenLayout } from '@/components/ui/ScreenLayout';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useInviteLookup, useAcceptInvite } from '@/hooks/useCaregivers';
+import { useAuthStore } from '@/stores/authStore';
+import { logAuthEvent } from '@/services/securityAudit';
 import { PERMISSION_TEMPLATE_MAP } from '@/lib/constants/permissionTemplates';
 import type { PermissionTemplateId } from '@/lib/constants/permissionTemplates';
 import { COLORS } from '@/lib/constants/colors';
@@ -16,6 +18,7 @@ export default function AcceptInviteScreen() {
   const { token } = useLocalSearchParams<{ token?: string }>();
   const lookup = useInviteLookup(token ?? null);
   const accept = useAcceptInvite();
+  const userId = useAuthStore((s) => s.user?.id ?? null);
 
   const invite = lookup.data ?? null;
   const template = useMemo(() => {
@@ -45,6 +48,7 @@ export default function AcceptInviteScreen() {
     if (!token) return;
     accept.mutate(token, {
       onSuccess: () => {
+        logAuthEvent({ eventType: 'invite_accepted', userId });
         // Brief success state, then go home
         router.replace('/(main)/(tabs)');
       },
@@ -52,6 +56,7 @@ export default function AcceptInviteScreen() {
   }
 
   function handleDecline() {
+    logAuthEvent({ eventType: 'invite_declined', userId });
     router.back();
   }
 

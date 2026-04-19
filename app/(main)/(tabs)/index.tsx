@@ -35,6 +35,7 @@ import {
   getBiometricCapability,
   hasBeenPromptedForUser,
   isBiometricEnabledForUser,
+  isPinSetForUser,
   markPromptedForUser,
   promptBiometric,
 } from '@/services/biometric';
@@ -124,19 +125,55 @@ export default function HomeScreen() {
 
     let cancelled = false;
     (async () => {
-      const [capability, alreadyEnabled, alreadyPrompted] = await Promise.all([
+      const [capability, alreadyEnabled, alreadyPrompted, pinSet] = await Promise.all([
         getBiometricCapability(),
         isBiometricEnabledForUser(user.id),
         hasBeenPromptedForUser(user.id),
+        isPinSetForUser(user.id),
       ]);
       if (cancelled) return;
-      if (!capability.available || !capability.enrolled) return;
-      if (alreadyEnabled || alreadyPrompted) return;
+      if (alreadyPrompted) return;
+      if (alreadyEnabled || pinSet) return;
 
-      const label = capability.label;
+      const biometricAvailable = capability.available && capability.enrolled;
+
+      if (biometricAvailable) {
+        const label = capability.label;
+        Alert.alert(
+          `Enable ${label}?`,
+          `Use ${label} to quickly unlock CareLead and keep your health information secure.`,
+          [
+            {
+              text: 'Not now',
+              style: 'cancel',
+              onPress: () => {
+                markPromptedForUser(user.id);
+              },
+            },
+            {
+              text: 'Enable',
+              onPress: async () => {
+                const result = await promptBiometric(`Enable ${label} for CareLead`);
+                if (result.success) {
+                  await enableBiometricForUser(user.id);
+                } else if (result.error && result.error !== 'user_cancel' && result.error !== 'cancelled') {
+                  Alert.alert(
+                    `Could not enable ${label}`,
+                    `Error: ${result.error}\n\nYou can try again later from Settings.`,
+                  );
+                }
+                await markPromptedForUser(user.id);
+              },
+            },
+          ],
+        );
+        return;
+      }
+
+      // No biometrics available — offer to set a PIN instead.
       Alert.alert(
-        `Enable ${label}?`,
-        `Use ${label} to quickly unlock CareLead and keep your health information secure.`,
+        'Set a PIN?',
+        'Set a 4-digit PIN to protect your health information.',
         [
           {
             text: 'Not now',
@@ -146,18 +183,10 @@ export default function HomeScreen() {
             },
           },
           {
-            text: 'Enable',
+            text: 'Set PIN',
             onPress: async () => {
-              const result = await promptBiometric(`Enable ${label} for CareLead`);
-              if (result.success) {
-                await enableBiometricForUser(user.id);
-              } else if (result.error && result.error !== 'user_cancel' && result.error !== 'cancelled') {
-                Alert.alert(
-                  `Could not enable ${label}`,
-                  `Error: ${result.error}\n\nYou can try again later from Settings.`,
-                );
-              }
               await markPromptedForUser(user.id);
+              router.push('/(auth)/setup-pin');
             },
           },
         ],
@@ -166,7 +195,7 @@ export default function HomeScreen() {
     return () => {
       cancelled = true;
     };
-  }, [user?.id]);
+  }, [user?.id, router]);
 
   // Auto-migrate medication profile_facts → med_medications on first load
   const migrationRanRef = useRef<string | null>(null);

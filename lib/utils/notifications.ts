@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import type { Task } from '@/lib/types/tasks';
+import { genericNotification } from '@/services/notifications';
 
 // Configure how notifications appear when the app is in foreground
 Notifications.setNotificationHandler({
@@ -36,10 +37,14 @@ export async function scheduleTaskReminder(task: Task): Promise<string | null> {
   const triggerDate = new Date(task.reminder_at);
   if (triggerDate <= new Date()) return null; // Don't schedule past reminders
 
+  // Task titles can contain PHI (medication names, provider names, etc.),
+  // so notification bodies MUST use the generic template. The task ID is
+  // attached via data so tapping still deep-links into the detail screen.
+  const safe = genericNotification('task');
   const id = await Notifications.scheduleNotificationAsync({
     content: {
-      title: 'Task Reminder',
-      body: task.title,
+      title: safe.title,
+      body: safe.body,
       data: { taskId: task.id, type: 'task_reminder' },
       sound: true,
     },

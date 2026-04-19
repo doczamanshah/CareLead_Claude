@@ -15,6 +15,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '@/components/ui/Button';
 import { sendPhoneOtp } from '@/services/auth';
+import { logAuthEvent } from '@/services/securityAudit';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 
@@ -76,6 +77,12 @@ export default function PhoneEntryScreen() {
     const fullNumber = `${country.dial}${raw}`;
     const result = await sendPhoneOtp(fullNumber);
     setLoading(false);
+
+    logAuthEvent({
+      eventType: 'otp_requested',
+      userId: null,
+      detail: { channel: 'sms', country: country.code, success: result.success },
+    });
 
     if (!result.success) {
       setError("We couldn't send a code to that number. Please check and try again.");

@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { sendPhoneOtp, verifyPhoneOtp } from '@/services/auth';
+import { logAuthEvent } from '@/services/securityAudit';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 
@@ -98,13 +99,30 @@ export default function VerifyOtpScreen() {
     setVerifying(false);
 
     if (!result.success) {
+      logAuthEvent({
+        eventType: 'otp_failed',
+        userId: null,
+        detail: { channel: 'sms' },
+      });
       setError('Invalid code. Please try again.');
       setDigits(Array(OTP_LENGTH).fill(''));
       inputRefs.current[0]?.focus();
       return;
     }
 
+    const userId = result.data.user?.id ?? null;
     const hasName = Boolean(result.data.user?.user_metadata?.full_name);
+    logAuthEvent({
+      eventType: 'otp_verified',
+      userId,
+      detail: { channel: 'sms' },
+    });
+    logAuthEvent({
+      eventType: hasName ? 'sign_in_phone' : 'sign_up_phone',
+      userId,
+      detail: { channel: 'sms' },
+    });
+
     if (hasName) {
       // Returning user — AuthGate will route to home once profiles load
       return;
@@ -119,6 +137,12 @@ export default function VerifyOtpScreen() {
     setError(null);
     const result = await sendPhoneOtp(phone);
     setResending(false);
+
+    logAuthEvent({
+      eventType: 'otp_requested',
+      userId: null,
+      detail: { channel: 'sms', resend: true, success: result.success },
+    });
 
     if (!result.success) {
       setError('Could not resend the code. Please try again.');
