@@ -76,8 +76,9 @@ function filterFactsForFallback(query: string, index: ProfileIndex): CanonicalFa
         recent: 1,
         unknown: 2,
         stale: 3,
+        very_stale: 4,
       };
-      const diff = (freshnessRank[a.freshness] ?? 4) - (freshnessRank[b.freshness] ?? 4);
+      const diff = (freshnessRank[a.freshness] ?? 5) - (freshnessRank[b.freshness] ?? 5);
       if (diff !== 0) return diff;
       const aT = a.dateRelevant ? new Date(a.dateRelevant).getTime() : 0;
       const bT = b.dateRelevant ? new Date(b.dateRelevant).getTime() : 0;

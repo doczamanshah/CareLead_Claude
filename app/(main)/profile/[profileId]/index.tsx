@@ -6,6 +6,9 @@ import { Card } from '@/components/ui/Card';
 import { useProfileDetail } from '@/hooks/useProfileDetail';
 import { useSmartEnrichment } from '@/hooks/useSmartEnrichment';
 import { useAccessGrants } from '@/hooks/useCaregivers';
+import { useDataQualityCheck } from '@/hooks/useDataQuality';
+import { healthTierLabel } from '@/services/dataQuality';
+import type { DataQualityHealthTier } from '@/lib/types/dataQuality';
 import { PROFILE_FACT_CATEGORIES } from '@/lib/types/profile';
 import type { ProfileFact, ProfileFactCategory } from '@/lib/types/profile';
 import { COLORS } from '@/lib/constants/colors';
@@ -26,6 +29,10 @@ export default function ProfileOverviewScreen() {
   const { data: profile, isLoading, error } = useProfileDetail(profileId ?? null);
   const { data: accessGrants } = useAccessGrants(profileId ?? null);
   const { tierInfo, nonMilestoneNudges, totalFacts } = useSmartEnrichment(
+    profileId ?? null,
+    profile?.household_id ?? null,
+  );
+  const { data: dataQualityReport } = useDataQualityCheck(
     profileId ?? null,
     profile?.household_id ?? null,
   );
@@ -71,6 +78,16 @@ export default function ProfileOverviewScreen() {
           color={COLORS.secondary.dark}
         />
       </TouchableOpacity>
+
+      {/* Data Quality summary */}
+      {dataQualityReport && (
+        <DataQualitySummaryCard
+          tier={dataQualityReport.healthTier}
+          staleCount={dataQualityReport.staleItems.length}
+          inconsistencyCount={dataQualityReport.inconsistencies.length}
+          onPress={() => router.push(`/(main)/profile/${profileId}/data-quality`)}
+        />
+      )}
 
       {/* Profile Header */}
       <View style={styles.profileHeader}>
@@ -191,6 +208,64 @@ export default function ProfileOverviewScreen() {
   );
 }
 
+interface DataQualitySummaryCardProps {
+  tier: DataQualityHealthTier;
+  staleCount: number;
+  inconsistencyCount: number;
+  onPress: () => void;
+}
+
+function DataQualitySummaryCard({
+  tier,
+  staleCount,
+  inconsistencyCount,
+  onPress,
+}: DataQualitySummaryCardProps) {
+  const visual =
+    tier === 'good'
+      ? {
+          color: COLORS.success.DEFAULT,
+          bg: COLORS.success.light,
+          icon: 'checkmark-circle' as const,
+        }
+      : tier === 'fair'
+        ? {
+            color: COLORS.warning.DEFAULT,
+            bg: COLORS.warning.light,
+            icon: 'alert-circle' as const,
+          }
+        : {
+            color: COLORS.tertiary.DEFAULT,
+            bg: COLORS.tertiary.light + '33',
+            icon: 'warning' as const,
+          };
+
+  const totalIssues = staleCount + inconsistencyCount;
+  const subtitle =
+    totalIssues === 0
+      ? 'All your information is current'
+      : `${totalIssues} item${totalIssues === 1 ? '' : 's'} to review`;
+
+  return (
+    <TouchableOpacity
+      style={[styles.dqCard, { backgroundColor: visual.bg }]}
+      onPress={onPress}
+      activeOpacity={0.8}
+    >
+      <View style={[styles.dqIconWrap, { backgroundColor: visual.color + '22' }]}>
+        <Ionicons name={visual.icon} size={20} color={visual.color} />
+      </View>
+      <View style={styles.dqBody}>
+        <Text style={[styles.dqTitle, { color: visual.color }]}>
+          {healthTierLabel(tier)}
+        </Text>
+        <Text style={styles.dqSubtitle}>{subtitle}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={18} color={visual.color} />
+    </TouchableOpacity>
+  );
+}
+
 function CategorySection({
   icon,
   label,
@@ -292,6 +367,33 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   strengthenSubtitle: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+  },
+  dqCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+  },
+  dqIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dqBody: {
+    flex: 1,
+  },
+  dqTitle: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.bold,
+    marginBottom: 2,
+  },
+  dqSubtitle: {
     fontSize: FONT_SIZES.xs,
     color: COLORS.text.secondary,
   },

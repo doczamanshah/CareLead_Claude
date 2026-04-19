@@ -5,9 +5,28 @@ import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type {
   AnswerCardAction,
   FactDomain,
+  FactFreshness,
   SummaryListCard as SummaryListCardType,
 } from '@/lib/types/ask';
 import { CARD_SHADOW, FLAG_COLORS, flagColorFromString } from './askCardShared';
+
+function ageHint(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return null;
+  const days = Math.floor((Date.now() - t) / (1000 * 60 * 60 * 24));
+  if (days < 30) return null;
+  if (days < 365) {
+    const months = Math.max(1, Math.floor(days / 30));
+    return `Updated ${months} month${months === 1 ? '' : 's'} ago`;
+  }
+  const years = Math.max(1, Math.floor(days / 365));
+  return `Updated over ${years} year${years === 1 ? '' : 's'} ago`;
+}
+
+function shouldShowAge(freshness: FactFreshness | undefined): boolean {
+  return freshness === 'stale' || freshness === 'very_stale';
+}
 
 interface SummaryListCardProps {
   card: SummaryListCardType;
@@ -100,6 +119,11 @@ export function SummaryListCard({ card, onActionPress }: SummaryListCardProps) {
                 {item.secondary && (
                   <Text style={styles.secondary} numberOfLines={1}>
                     {item.secondary}
+                  </Text>
+                )}
+                {shouldShowAge(item.freshness) && ageHint(item.lastUpdated) && (
+                  <Text style={styles.ageHint} numberOfLines={1}>
+                    {ageHint(item.lastUpdated)}
                   </Text>
                 )}
               </View>
@@ -261,6 +285,12 @@ const styles = StyleSheet.create({
   secondary: {
     fontSize: FONT_SIZES.xs,
     color: COLORS.text.tertiary,
+    marginTop: 2,
+  },
+  ageHint: {
+    fontSize: 11,
+    color: COLORS.text.tertiary,
+    fontStyle: 'italic',
     marginTop: 2,
   },
   footer: {

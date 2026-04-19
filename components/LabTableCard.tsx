@@ -17,6 +17,13 @@ function formatRelative(iso: string | null): string | null {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function isOverAYearOld(iso: string | null): boolean {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return false;
+  return Date.now() - t > 365 * 24 * 60 * 60 * 1000;
+}
+
 export function LabTableCard({ card, onActionPress }: LabTableCardProps) {
   const viewSource = card.actions.find((a) => a.type === 'view_source');
   const dateLine = formatRelative(card.dateRelevant);
@@ -115,6 +122,13 @@ export function LabTableCard({ card, onActionPress }: LabTableCardProps) {
           })}
         </View>
       </ScrollView>
+
+      {isOverAYearOld(card.dateRelevant) && (
+        <View style={styles.ageNote}>
+          <Ionicons name="time-outline" size={12} color={COLORS.text.tertiary} />
+          <Text style={styles.ageNoteText}>These results are over a year old</Text>
+        </View>
+      )}
 
       {/* Provenance footer */}
       <View style={styles.footer}>
@@ -242,6 +256,17 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     borderTopWidth: 1,
     borderTopColor: COLORS.border.light,
+  },
+  ageNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 8,
+  },
+  ageNoteText: {
+    fontSize: 11,
+    color: COLORS.text.tertiary,
+    fontStyle: 'italic',
   },
   provenanceRow: {
     flexDirection: 'row',

@@ -49,9 +49,23 @@ const FRESHNESS_CONFIG: Record<
 > = {
   current: { label: 'Current', color: COLORS.success.DEFAULT, showBadge: true, showLabel: false },
   recent: { label: 'Recent', color: COLORS.warning.DEFAULT, showBadge: true, showLabel: false },
-  stale: { label: 'Stale', color: COLORS.text.tertiary, showBadge: true, showLabel: true },
+  stale: { label: 'May be outdated', color: COLORS.text.tertiary, showBadge: true, showLabel: true },
+  very_stale: { label: null, color: COLORS.tertiary.DEFAULT, showBadge: true, showLabel: true },
   unknown: { label: null, color: COLORS.text.tertiary, showBadge: false, showLabel: false },
 };
+
+function monthsAgoLabel(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso).getTime();
+  if (Number.isNaN(d)) return null;
+  const days = Math.floor((Date.now() - d) / (1000 * 60 * 60 * 24));
+  if (days < 365) {
+    const months = Math.max(1, Math.floor(days / 30));
+    return `Last updated ${months} month${months === 1 ? '' : 's'} ago`;
+  }
+  const years = Math.max(1, Math.floor(days / 365));
+  return `Last updated ${years} year${years === 1 ? '' : 's'} ago`;
+}
 
 function formatRelative(iso: string | null): string | null {
   if (!iso) return null;
@@ -125,16 +139,23 @@ export function AnswerCard({ card, onActionPress }: AnswerCardProps) {
         <Text style={styles.title} numberOfLines={2}>
           {card.title}
         </Text>
-        {freshness.showBadge && (
-          <View style={styles.freshnessWrap}>
-            <View style={[styles.freshnessDot, { backgroundColor: freshness.color }]} />
-            {freshness.showLabel && freshness.label && (
-              <Text style={[styles.freshnessLabel, { color: freshness.color }]}>
-                {freshness.label}
-              </Text>
-            )}
-          </View>
-        )}
+        {freshness.showBadge && (() => {
+          const dynamicLabel =
+            card.freshness === 'very_stale'
+              ? monthsAgoLabel(card.dateRelevant ?? card.provenance.verifiedAt)
+              : null;
+          const labelText = dynamicLabel ?? freshness.label;
+          return (
+            <View style={styles.freshnessWrap}>
+              <View style={[styles.freshnessDot, { backgroundColor: freshness.color }]} />
+              {freshness.showLabel && labelText && (
+                <Text style={[styles.freshnessLabel, { color: freshness.color }]}>
+                  {labelText}
+                </Text>
+              )}
+            </View>
+          );
+        })()}
       </View>
 
       {/* Primary value — the main answer */}

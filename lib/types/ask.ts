@@ -49,12 +49,13 @@ export interface FactProvenance {
 
 /**
  * Freshness derived from the most-relevant timestamp on a fact:
- *  - current : updated within the last 30 days
- *  - recent  : 30 – 90 days old
- *  - stale   : 90+ days old
- *  - unknown : no date available
+ *  - current    : updated within the last 30 days
+ *  - recent     : 30 – 90 days old
+ *  - stale      : 90 – 365 days old
+ *  - very_stale : > 365 days old
+ *  - unknown    : no date available
  */
-export type FactFreshness = 'current' | 'recent' | 'stale' | 'unknown';
+export type FactFreshness = 'current' | 'recent' | 'stale' | 'very_stale' | 'unknown';
 
 export interface CanonicalFact {
   id: string;
@@ -202,6 +203,10 @@ export interface SummaryListItem {
   sourceRoute?: string | null;
   status?: FactStatus;
   conflictGroupId?: string | null;
+  /** ISO timestamp of last update — used to render a subtle "Updated X ago" hint for stale items. */
+  lastUpdated?: string | null;
+  /** Freshness tier propagated from the underlying CanonicalFact. */
+  freshness?: FactFreshness;
 }
 
 export interface SummaryListCard {

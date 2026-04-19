@@ -45,7 +45,8 @@ function computeFreshness(iso: string | null): FactFreshness {
   const days = Math.floor((Date.now() - parsed) / MS_PER_DAY);
   if (days < 30) return 'current';
   if (days < 90) return 'recent';
-  return 'stale';
+  if (days < 365) return 'stale';
+  return 'very_stale';
 }
 
 function normalizeKey(raw: string | null | undefined): string {

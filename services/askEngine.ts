@@ -664,6 +664,8 @@ function buildMedicationSummary(facts: CanonicalFact[]): SummaryListCard {
       sourceRoute: routeForFact(f),
       status: f.status,
       conflictGroupId: f.conflictGroupId,
+      lastUpdated: f.updatedAt,
+      freshness: f.freshness,
     };
   });
 
@@ -694,6 +696,8 @@ function buildAllergySummary(facts: CanonicalFact[]): SummaryListCard {
       sourceRoute: null,
       status: f.status,
       conflictGroupId: f.conflictGroupId,
+      lastUpdated: f.updatedAt,
+      freshness: f.freshness,
     };
   });
 
@@ -722,6 +726,8 @@ function buildConditionSummary(facts: CanonicalFact[]): SummaryListCard {
       sourceRoute: null,
       status: f.status,
       conflictGroupId: f.conflictGroupId,
+      lastUpdated: f.updatedAt,
+      freshness: f.freshness,
     };
   });
   return {
@@ -748,6 +754,8 @@ function buildCareTeamSummary(facts: CanonicalFact[]): SummaryListCard {
       sourceType: f.sourceType,
       status: f.status,
       conflictGroupId: f.conflictGroupId,
+      lastUpdated: f.updatedAt,
+      freshness: f.freshness,
     };
   });
   return {
@@ -774,6 +782,8 @@ function buildInsuranceSummary(facts: CanonicalFact[]): SummaryListCard {
       sourceType: f.sourceType,
       status: f.status,
       conflictGroupId: f.conflictGroupId,
+      lastUpdated: f.updatedAt,
+      freshness: f.freshness,
     };
   });
   return {
@@ -800,6 +810,8 @@ function buildSurgerySummary(facts: CanonicalFact[]): SummaryListCard {
       sourceType: f.sourceType,
       status: f.status,
       conflictGroupId: f.conflictGroupId,
+      lastUpdated: f.updatedAt,
+      freshness: f.freshness,
     };
   });
   return {

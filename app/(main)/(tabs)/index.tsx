@@ -32,6 +32,10 @@ import {
   useDismissReviewBriefing,
   useProfileReviewDue,
 } from '@/hooks/useProfileReview';
+import {
+  useDataQualityBriefing,
+  useDismissDataQualityBriefing,
+} from '@/hooks/useDataQuality';
 import type { BillingBriefingItem } from '@/services/billingBriefing';
 import type { ResultsBriefingItem } from '@/services/resultsBriefing';
 import type { PreventiveBriefingItem } from '@/services/preventiveBriefing';
@@ -147,6 +151,11 @@ export default function HomeScreen() {
   );
   const { data: profileReviewDue } = useProfileReviewDue(activeProfileId);
   const dismissReviewBriefing = useDismissReviewBriefing();
+  const dataQualityBriefing = useDataQualityBriefing(
+    activeProfileId,
+    activeProfile?.household_id ?? null,
+  );
+  const dismissDataQualityBriefing = useDismissDataQualityBriefing(activeProfileId);
 
   // Caregiver enrichment — only fires if current user is a caregiver (not owner)
   const { data: isCaregiver } = useIsCaregiverForProfile(activeProfileId);
@@ -340,6 +349,7 @@ export default function HomeScreen() {
     const caregiverEnrichmentItems: CaregiverEnrichmentPrompt[] =
       caregiverPrompts ?? [];
     const showProfileReview = !!profileReviewDue;
+    const dataQualityItem = dataQualityBriefing;
 
     const nothingDue =
       !hasMeds &&
@@ -353,7 +363,8 @@ export default function HomeScreen() {
       postVisitItems.length === 0 &&
       preAppointmentItems.length === 0 &&
       caregiverEnrichmentItems.length === 0 &&
-      !showProfileReview;
+      !showProfileReview &&
+      !dataQualityItem;
 
     const briefingLineCount =
       (hasMeds ? 1 : 0) +
@@ -366,7 +377,8 @@ export default function HomeScreen() {
       postVisitItems.length +
       preAppointmentItems.length +
       caregiverEnrichmentItems.length +
-      (showProfileReview ? 1 : 0);
+      (showProfileReview ? 1 : 0) +
+      (dataQualityItem ? 1 : 0);
 
     return {
       hasMeds,
@@ -383,10 +395,11 @@ export default function HomeScreen() {
       preAppointmentItems,
       caregiverEnrichmentItems,
       showProfileReview,
+      dataQualityItem,
       nothingDue,
       briefingLineCount,
     };
-  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing, preventiveBriefing, postVisitBriefing, preAppointmentBriefing, profileReviewDue, caregiverPrompts]);
+  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing, preventiveBriefing, postVisitBriefing, preAppointmentBriefing, profileReviewDue, caregiverPrompts, dataQualityBriefing]);
 
   // Module stats
   const moduleStats = useMemo(() => {
@@ -921,6 +934,32 @@ export default function HomeScreen() {
                           numberOfLines={2}
                         >
                           Time for a quick profile check-in. Keep your health info accurate.
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    {briefing.dataQualityItem && activeProfileId && (
+                      <TouchableOpacity
+                        style={styles.briefingLine}
+                        activeOpacity={0.7}
+                        onPress={(e) => {
+                          e.stopPropagation?.();
+                          dismissDataQualityBriefing.mutate();
+                          router.push(`/(main)/profile/${activeProfileId}/data-quality`);
+                        }}
+                      >
+                        <Ionicons
+                          name={briefing.dataQualityItem.icon as keyof typeof Ionicons.glyphMap}
+                          size={18}
+                          color={COLORS.text.secondary}
+                        />
+                        <Text
+                          style={[
+                            styles.briefingLineText,
+                            { color: COLORS.text.secondary },
+                          ]}
+                          numberOfLines={2}
+                        >
+                          {briefing.dataQualityItem.message}
                         </Text>
                       </TouchableOpacity>
                     )}
