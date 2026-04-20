@@ -1,5 +1,10 @@
 import { supabase } from '@/lib/supabase';
-import type { Profile, ProfileFact, ProfileWithFacts } from '@/lib/types/profile';
+import type {
+  Profile,
+  ProfileFact,
+  ProfileWithFacts,
+  RelationshipLabel,
+} from '@/lib/types/profile';
 import { normalizeSexForEligibility } from '@/lib/utils/gender';
 
 /**
@@ -123,7 +128,7 @@ export async function createDependentProfile(
 }
 
 /**
- * Update basic profile info (name, DOB, gender).
+ * Update basic profile info (name, DOB, gender, relationship_label).
  */
 export async function updateProfile(
   profileId: string,
@@ -131,6 +136,7 @@ export async function updateProfile(
     display_name?: string;
     date_of_birth?: string | null;
     gender?: string | null;
+    relationship_label?: RelationshipLabel | null;
   },
 ): Promise<ServiceResult<Profile>> {
   const patch: typeof data = { ...data };
@@ -150,6 +156,58 @@ export async function updateProfile(
   }
 
   return { success: true, data: profile as Profile };
+}
+
+/**
+ * Add a family member (dependent profile) to the household via RPC.
+ * The RPC runs as SECURITY DEFINER and logs the audit event atomically.
+ */
+export async function addFamilyMember(params: {
+  householdId: string;
+  name: string;
+  relationship: Exclude<RelationshipLabel, 'self'>;
+  dateOfBirth?: string;
+  gender?: string;
+}): Promise<ServiceResult<{ profileId: string }>> {
+  const canonicalGender = canonicalizeGender(params.gender ?? null);
+
+  const { data, error } = await supabase.rpc('add_family_member', {
+    p_household_id: params.householdId,
+    p_display_name: params.name,
+    p_relationship: params.relationship,
+    p_date_of_birth: params.dateOfBirth ?? null,
+    p_gender: typeof canonicalGender === 'string' ? canonicalGender : null,
+  });
+
+  if (error) {
+    return { success: false, error: error.message, code: error.code };
+  }
+
+  const profileId = (data as { profile_id?: string } | null)?.profile_id;
+  if (!profileId) {
+    return { success: false, error: 'Could not create family member' };
+  }
+
+  return { success: true, data: { profileId } };
+}
+
+/**
+ * Soft-delete a profile. Used by the "remove family member" flow.
+ * The self profile cannot be removed (enforced at the UI layer).
+ */
+export async function softDeleteProfile(
+  profileId: string,
+): Promise<ServiceResult<null>> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ deleted_at: new Date().toISOString() })
+    .eq('id', profileId);
+
+  if (error) {
+    return { success: false, error: error.message, code: error.code };
+  }
+
+  return { success: true, data: null };
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   fetchPendingIntentSheets,
   triggerExtraction,
 } from '@/services/extraction';
+import { safeError } from '@/lib/utils/safeLog';
 import type { TriggerExtractionParams } from '@/lib/types/intent-sheet';
 
 /**
@@ -69,10 +70,9 @@ export function useTriggerExtraction() {
       return result.data;
     },
     onError: (error, variables) => {
-      console.error(
-        '[extraction] Mutation failed for artifact',
-        variables.artifactId,
-        error.message,
+      safeError(
+        `[extraction] Mutation failed for artifact ${variables.artifactId}`,
+        error,
       );
     },
     onSuccess: (_data, variables) => {

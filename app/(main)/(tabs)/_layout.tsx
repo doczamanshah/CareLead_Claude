@@ -1,8 +1,10 @@
+import { useMemo } from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Platform, StyleSheet } from 'react-native';
-import { COLORS } from '@/lib/constants/colors';
+import { useTheme } from '@/hooks/useTheme';
 import { TYPOGRAPHY } from '@/lib/constants/design';
+import type { ThemePalette } from '@/lib/constants/themes';
 
 const TAB_ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
   index: 'home',
@@ -21,13 +23,19 @@ const TAB_ICONS_OUTLINE: Record<string, keyof typeof Ionicons.glyphMap> = {
 };
 
 export default function TabLayout() {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => buildStyles(colors), [colors]);
+  // In dark mode, primary is already the lighter variant so it contrasts
+  // against the dark tab bar. In light mode we use the default dark green.
+  const activeTint = isDark ? colors.primary.lighter : colors.primary.DEFAULT;
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: COLORS.primary.DEFAULT,
-        tabBarInactiveTintColor: COLORS.text.tertiary,
-        sceneStyle: { backgroundColor: COLORS.background.DEFAULT },
+        tabBarActiveTintColor: activeTint,
+        tabBarInactiveTintColor: colors.text.tertiary,
+        sceneStyle: { backgroundColor: colors.background.DEFAULT },
         tabBarStyle: styles.tabBar,
         tabBarLabelStyle: styles.label,
         tabBarItemStyle: styles.item,
@@ -103,24 +111,26 @@ export default function TabLayout() {
   );
 }
 
-const styles = StyleSheet.create({
-  tabBar: {
-    backgroundColor: COLORS.background.card,
-    borderTopColor: COLORS.border.light,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    height: Platform.OS === 'ios' ? 84 : 60,
-    paddingTop: 6,
-    paddingBottom: Platform.OS === 'ios' ? 28 : 6,
-    elevation: 0,
-    shadowOpacity: 0,
-  },
-  label: {
-    ...TYPOGRAPHY.caption,
-    fontSize: 10,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  item: {
-    paddingVertical: 4,
-  },
-});
+function buildStyles(colors: ThemePalette) {
+  return StyleSheet.create({
+    tabBar: {
+      backgroundColor: colors.background.card,
+      borderTopColor: colors.border.light,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      height: Platform.OS === 'ios' ? 84 : 60,
+      paddingTop: 6,
+      paddingBottom: Platform.OS === 'ios' ? 28 : 6,
+      elevation: 0,
+      shadowOpacity: 0,
+    },
+    label: {
+      ...TYPOGRAPHY.caption,
+      fontSize: 10,
+      fontWeight: '600',
+      marginTop: 2,
+    },
+    item: {
+      paddingVertical: 4,
+    },
+  });
+}

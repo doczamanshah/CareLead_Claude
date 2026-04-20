@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '@/lib/supabase';
+import { safeLog, safeError } from '@/lib/utils/safeLog';
 import type {
   TriggerExtractionParams,
   ExtractionResponse,
@@ -26,27 +27,32 @@ export async function triggerExtraction(
 ): Promise<ServiceResult<ExtractionResponse>> {
   const { artifactId, profileId } = params;
 
-  console.log('[extraction] Calling extract-document Edge Function', { artifactId, profileId });
+  safeLog('[extraction] Calling extract-document Edge Function', { artifactId, profileId });
 
   // Ensure we have a valid session — the Supabase gateway requires a JWT
   const { data: sessionData } = await supabase.auth.getSession();
   if (!sessionData.session) {
-    console.error('[extraction] No active session — cannot call Edge Function');
+    safeError('[extraction] No active session — cannot call Edge Function');
     return { success: false, error: 'Not authenticated' };
   }
 
-  console.log('[extraction] Session found, invoking function...');
+  safeLog('[extraction] Session found, invoking function');
 
   const { data, error } = await supabase.functions.invoke('extract-document', {
     body: { artifactId, profileId },
   });
 
   if (error) {
-    console.error('[extraction] Edge Function error:', error.message, error);
+    safeError('[extraction] Edge Function error', error);
     return { success: false, error: error.message ?? 'Extraction request failed' };
   }
 
-  console.log('[extraction] Edge Function response:', JSON.stringify(data));
+  // Response may contain extracted PHI — only log non-sensitive metadata.
+  safeLog('[extraction] Edge Function response', {
+    intentSheetId: data?.intentSheetId,
+    documentType: data?.documentType,
+    fieldCount: data?.fieldCount,
+  });
 
   // Edge Function may return a message (e.g., for voice/PDF) with no intent sheet
   if (!data?.intentSheetId) {

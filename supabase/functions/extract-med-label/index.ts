@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { logError } from "../_shared/logging.ts";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -118,8 +119,8 @@ Deno.serve(async (req: Request) => {
     });
 
     if (!claudeResponse.ok) {
-      const errBody = await claudeResponse.text();
-      console.error("Claude API error:", claudeResponse.status, errBody);
+      await claudeResponse.text().catch(() => undefined);
+      logError("extract-med-label.claude_error", undefined, { status: claudeResponse.status });
       await markFailed(supabase, artifactId);
       return json({ error: "AI extraction failed" }, 502);
     }
@@ -156,7 +157,7 @@ Deno.serve(async (req: Request) => {
 
     return json({ medication });
   } catch (err) {
-    console.error("Unhandled error in extract-med-label:", err);
+    logError("extract-med-label.unhandled", err);
     return json({ error: "Internal server error" }, 500);
   }
 });

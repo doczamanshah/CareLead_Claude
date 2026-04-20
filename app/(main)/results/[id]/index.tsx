@@ -42,6 +42,7 @@ import {
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import { formatLabValue } from '@/lib/utils/formatLabValue';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 import type {
   ResultDocument,
   ResultItem,
@@ -363,7 +364,7 @@ export default function ResultDetailScreen() {
           onPress: () => {
             deleteResult.mutate(result.id, {
               onSuccess: () => router.back(),
-              onError: (err) => Alert.alert('Error', err.message),
+              onError: (err) => Alert.alert('Could not delete', sanitizeErrorMessage(err)),
             });
           },
         },

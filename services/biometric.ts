@@ -2,6 +2,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import * as SecureStore from 'expo-secure-store';
 import * as Crypto from 'expo-crypto';
 import { Platform } from 'react-native';
+import { safeLog, safeError } from '@/lib/utils/safeLog';
 
 const KEY_ENABLED = 'carelead_biometric_enabled';
 const KEY_USER_ID = 'carelead_biometric_user_id';
@@ -68,7 +69,7 @@ export async function getBiometricCapability(): Promise<BiometricCapability> {
       LocalAuthentication.supportedAuthenticationTypesAsync(),
     ]);
 
-    console.log('[biometric] capability check', { hasHardware, enrolled, types });
+    safeLog('[biometric] capability check', { hasHardware, enrolled, types });
 
     let kind: BiometricKind = 'generic';
     if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
@@ -94,7 +95,7 @@ export async function getBiometricCapability(): Promise<BiometricCapability> {
 
     return { available: hasHardware, enrolled, kind, label };
   } catch (err) {
-    console.error('[biometric] capability check failed', err);
+    safeError('[biometric] capability check failed', err);
     return { available: false, enrolled: false, kind: 'generic', label: 'Biometrics' };
   }
 }
@@ -103,18 +104,18 @@ export async function promptBiometric(reason: string): Promise<{
   success: boolean;
   error?: string;
 }> {
-  console.log('[biometric] prompt requested', { reason });
+  safeLog('[biometric] prompt requested');
   try {
     const result = await LocalAuthentication.authenticateAsync({
       promptMessage: reason,
       cancelLabel: 'Cancel',
       disableDeviceFallback: true,
     });
-    console.log('[biometric] prompt result', result);
+    safeLog('[biometric] prompt result', { success: result.success });
     if (result.success) return { success: true };
     return { success: false, error: (result as { error?: string }).error ?? 'cancelled' };
   } catch (err) {
-    console.error('[biometric] prompt threw', err);
+    safeError('[biometric] prompt threw', err);
     return { success: false, error: err instanceof Error ? err.message : 'unknown' };
   }
 }

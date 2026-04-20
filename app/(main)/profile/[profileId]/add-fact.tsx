@@ -12,6 +12,7 @@ import { PROFILE_FACT_CATEGORIES } from '@/lib/types/profile';
 import type { ProfileFactCategory } from '@/lib/types/profile';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 
 const DATE_FIELD_KEYS = new Set(['diagnosed_date', 'date', 'target_date']);
 
@@ -206,7 +207,7 @@ export default function AddFactScreen() {
           router.back();
         },
         onError: (err) => {
-          Alert.alert('Error', err.message);
+          Alert.alert('Could not save', sanitizeErrorMessage(err));
         },
       },
     );

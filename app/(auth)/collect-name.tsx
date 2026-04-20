@@ -18,6 +18,7 @@ import { fetchUserProfiles } from '@/services/profiles';
 import { updateUserDisplayName } from '@/services/auth';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { safeLog } from '@/lib/utils/safeLog';
 
 export default function CollectNameScreen() {
   const router = useRouter();
@@ -34,7 +35,7 @@ export default function CollectNameScreen() {
       const refreshed = await fetchUserProfiles(user.id);
       if (refreshed.success) setProfiles(refreshed.data);
     } catch (err) {
-      console.log('[collect-name] profile refresh failed', err);
+      safeLog('[collect-name] profile refresh failed', err);
     }
   }
 
@@ -49,16 +50,16 @@ export default function CollectNameScreen() {
     setSaving(true);
     setError(null);
 
-    console.log('[collect-name] saving name');
+    safeLog('[collect-name] saving name');
     try {
       const result = await updateUserDisplayName(user.id, trimmed);
       if (!result.success) {
-        console.log('[collect-name] update returned error:', result.error);
+        safeLog('[collect-name] update returned error:', result.error);
       } else {
-        console.log('[collect-name] update succeeded');
+        safeLog('[collect-name] update succeeded');
       }
     } catch (err) {
-      console.log('[collect-name] unexpected error while saving name', err);
+      safeLog('[collect-name] unexpected error while saving name', err);
       Alert.alert(
         'Heads up',
         "We couldn't save your name right now, but you can set it later in Settings.",
@@ -67,14 +68,14 @@ export default function CollectNameScreen() {
 
     await refreshProfiles();
 
-    console.log('[collect-name] navigating to onboarding');
+    safeLog('[collect-name] navigating to onboarding');
     router.replace('/(auth)/onboarding');
   }
 
   async function handleSkip() {
     if (saving) return;
     setSaving(true);
-    console.log('[collect-name] skipped, navigating to onboarding');
+    safeLog('[collect-name] skipped, navigating to onboarding');
     await refreshProfiles();
     router.replace('/(auth)/onboarding');
   }

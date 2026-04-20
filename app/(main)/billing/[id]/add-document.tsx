@@ -20,6 +20,7 @@ import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useUploadBillingDocument, useTriggerDocumentExtraction } from '@/hooks/useBilling';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 import type { BillingDocType } from '@/lib/types/billing';
 import { BILLING_DOC_TYPE_LABELS } from '@/lib/types/billing';
 
@@ -157,7 +158,7 @@ export default function AddBillingDocumentScreen() {
           router.back();
         },
         onError: (err) => {
-          Alert.alert('Upload Error', err.message || 'Failed to upload document');
+          Alert.alert('Upload Error', sanitizeErrorMessage(err, { fallback: 'Failed to upload document.' }));
         },
       },
     );

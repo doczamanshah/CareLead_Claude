@@ -10,6 +10,8 @@ import { useUploadArtifact } from '@/hooks/useArtifacts';
 import { useTriggerExtraction } from '@/hooks/useIntentSheet';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { safeLog, safeError } from '@/lib/utils/safeLog';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 
 const ALLOWED_TYPES = [
   'application/pdf',
@@ -83,7 +85,7 @@ export default function UploadScreen() {
           artifactId: artifact.id,
           profileId: activeProfileId,
         });
-        console.log('[upload] Extraction triggered successfully for artifact', artifact.id);
+        safeLog('[upload] Extraction triggered successfully for artifact', artifact.id);
 
         if (extraction.intentSheetId) {
           router.replace(`/(main)/intent-sheet/${extraction.intentSheetId}`);
@@ -91,13 +93,12 @@ export default function UploadScreen() {
         }
       } catch (extractionErr) {
         // Log but don't block navigation — extraction can be retried
-        console.error('[upload] Extraction trigger failed:', extractionErr);
+        safeError('[upload] Extraction trigger failed', extractionErr);
       }
 
       router.replace('/(main)/(tabs)/documents');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed';
-      Alert.alert('Upload Error', message);
+      Alert.alert('Upload Error', sanitizeErrorMessage(err, { fallback: 'Upload failed.' }));
     }
   }
 

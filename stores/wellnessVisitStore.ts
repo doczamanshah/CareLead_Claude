@@ -6,6 +6,12 @@
  * can be large (the freeform dictation alone may exceed SecureStore's
  * ~2KB-per-key iOS limit) so we persist to a JSON file in the document
  * directory instead of SecureStore.
+ *
+ * HIPAA note: iOS `documentDirectory` is app-sandboxed and encrypted at rest
+ * via File Protection (`NSFileProtectionCompleteUntilFirstUserAuthentication`
+ * by default); on Android it is app-private internal storage. The file is
+ * cleared by `clearPersisted()` on sign-out (see `services/auth.ts` →
+ * `cleanupOnSignOut`) and by `resetVisit()` once the packet is generated.
  */
 
 import { create } from 'zustand';
@@ -75,6 +81,14 @@ async function clearPersisted(): Promise<void> {
   } catch {
     // Non-fatal.
   }
+}
+
+/**
+ * Called from the auth sign-out cleanup so the freeform dictation + extracted
+ * wellness-visit PHI never survives across user sessions on the same device.
+ */
+export async function clearWellnessVisitPersisted(): Promise<void> {
+  await clearPersisted();
 }
 
 interface WellnessVisitState extends WellnessVisitPrep {

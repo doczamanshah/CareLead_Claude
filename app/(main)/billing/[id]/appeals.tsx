@@ -32,6 +32,7 @@ import {
 } from '@/hooks/useBilling';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 import {
   DENIAL_CATEGORY_LABELS,
   APPEAL_STATUS_LABELS,
@@ -549,7 +550,7 @@ function AppealPacketCard({
           });
         },
         onError: (err) => {
-          Alert.alert('Letter generation failed', err.message);
+          Alert.alert('Letter generation failed', sanitizeErrorMessage(err));
         },
       },
     );

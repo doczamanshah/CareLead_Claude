@@ -23,6 +23,7 @@ import type {
 import { totalSelected } from '@/services/healthSummaryImport';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { safeWarn } from '@/lib/utils/safeLog';
 
 interface SectionConfig {
   key: keyof ImportSelection;
@@ -228,7 +229,8 @@ export default function ImportReviewScreen() {
       });
       setImportedCounts(res.counts);
       if (res.failures.length > 0) {
-        console.warn('[import] partial failures', res.failures);
+        // failures may contain names/dates — log count only in production.
+        safeWarn('[import] partial failures', { count: res.failures.length, failures: res.failures });
       }
       router.replace('/(main)/capture/import-done' as never);
     } catch (err) {

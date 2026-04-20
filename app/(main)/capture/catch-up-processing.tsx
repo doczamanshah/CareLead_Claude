@@ -16,6 +16,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { processBatchDocuments } from '@/services/batchCapture';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { safeError } from '@/lib/utils/safeLog';
 
 const CLASSIFICATION_LABELS: Record<DocumentClassification, string> = {
   medication_label: 'Medication',
@@ -78,7 +79,7 @@ export default function CatchUpProcessingScreen() {
           },
         );
       } catch (e) {
-        console.error('[catch-up] batch processing error', e);
+        safeError('[catch-up] batch processing error', e);
       } finally {
         router.replace('/(main)/capture/catch-up-summary');
       }

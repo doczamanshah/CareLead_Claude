@@ -30,6 +30,7 @@ import { useCreateMedication } from '@/hooks/useMedications';
 import { updateProfileBasics, fetchUserProfiles } from '@/services/profiles';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { safeLog } from '@/lib/utils/safeLog';
 
 type CaringFor = 'self' | 'family' | 'other';
 type Sex = 'male' | 'female';
@@ -64,7 +65,7 @@ export default function OnboardingScreen() {
   useEffect(() => {
     supabase.auth
       .updateUser({ data: { onboarding_completed: true } })
-      .catch((err) => console.log('[onboarding] could not set flag', err));
+      .catch((err) => safeLog('[onboarding] could not set flag', err));
   }, []);
 
   const advance = () =>
@@ -86,7 +87,7 @@ export default function OnboardingScreen() {
     try {
       await supabase.auth.updateUser({ data: { caring_for: value } });
     } catch (err) {
-      console.log('[onboarding] could not save caring_for', err);
+      safeLog('[onboarding] could not save caring_for', err);
     }
     advance();
   }
@@ -118,7 +119,7 @@ export default function OnboardingScreen() {
         }
       }
     } catch (err) {
-      console.log('[onboarding] basics save failed', err);
+      safeLog('[onboarding] basics save failed', err);
     } finally {
       setSavingBasics(false);
       advance();
@@ -583,7 +584,7 @@ function InsuranceCardFlow({
           await autoAcceptIntentSheet(extraction.intentSheetId);
         }
       } catch (err) {
-        console.log('[onboarding] insurance extraction failed', err);
+        safeLog('[onboarding] insurance extraction failed', err);
       }
 
       onDone();

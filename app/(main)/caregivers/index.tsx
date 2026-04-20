@@ -8,17 +8,26 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { useRemoveFamilyMember } from '@/hooks/useProfiles';
 import {
   useAccessGrants,
   usePendingInvites,
   useCancelInvite,
   useResendInvite,
 } from '@/hooks/useCaregivers';
+import { useProfileStore } from '@/stores/profileStore';
 import { PERMISSION_TEMPLATE_MAP } from '@/lib/constants/permissionTemplates';
 import type { PermissionTemplateId } from '@/lib/constants/permissionTemplates';
 import type { CaregiverInvite } from '@/lib/types/caregivers';
+import type { Profile } from '@/lib/types/profile';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
+import {
+  getAvatarColor,
+  getAvatarInitial,
+  getRelationshipLabel,
+} from '@/lib/utils/profileAvatar';
 
 const APP_STORE_LINK_PLACEHOLDER = '[App Store link coming soon]';
 
@@ -44,6 +53,9 @@ export default function CaregiversScreen() {
 
   return (
     <ScreenLayout>
+      {/* Family Members */}
+      <FamilyMembersSection profiles={profiles} />
+
       {/* Header */}
       <Text style={styles.subtitle}>
         People who help with {profile?.display_name ?? 'care'}
@@ -172,6 +184,130 @@ export default function CaregiversScreen() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Family members section — lists all profiles in the household
+// ─────────────────────────────────────────────────────────────────────
+
+function FamilyMembersSection({ profiles }: { profiles: Profile[] }) {
+  const router = useRouter();
+  const remove = useRemoveFamilyMember();
+  const activeProfileId = useProfileStore((s) => s.activeProfileId);
+  const switchProfile = useProfileStore((s) => s.switchProfile);
+
+  const sorted = [...profiles].sort((a, b) => {
+    if (a.relationship === 'self') return -1;
+    if (b.relationship === 'self') return 1;
+    return a.display_name.localeCompare(b.display_name);
+  });
+
+  function handleRemove(p: Profile) {
+    Alert.alert(
+      `Remove ${p.display_name}?`,
+      `This will remove ${p.display_name} from your family. Their health data will no longer be accessible in the app.`,
+      [
+        { text: 'Keep', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => {
+            // If they were active, switch to self first so we don't orphan state.
+            if (activeProfileId === p.id) {
+              const self = profiles.find((q) => q.relationship === 'self');
+              if (self) switchProfile(self.id);
+            }
+            remove.mutate(p.id, {
+              onError: (err) =>
+                Alert.alert('Something went wrong', sanitizeErrorMessage(err)),
+            });
+          },
+        },
+      ],
+    );
+  }
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>Family Members</Text>
+      <Text style={styles.sectionSubtitle}>
+        People whose health you manage from this account.
+      </Text>
+      {sorted.map((p) => {
+        const isSelf = p.relationship === 'self';
+        return (
+          <Card
+            key={p.id}
+            style={styles.grantCard}
+            onPress={() => {
+              if (isSelf) {
+                router.push(`/(main)/profile/${p.id}`);
+              } else {
+                // Tap shows menu for non-self members
+                Alert.alert(p.display_name, undefined, [
+                  {
+                    text: 'View Profile',
+                    onPress: () => {
+                      switchProfile(p.id);
+                      router.push(`/(main)/profile/${p.id}`);
+                    },
+                  },
+                  {
+                    text: 'Edit',
+                    onPress: () => router.push(`/(main)/profile/${p.id}/edit`),
+                  },
+                  {
+                    text: 'Remove',
+                    style: 'destructive',
+                    onPress: () => handleRemove(p),
+                  },
+                  { text: 'Cancel', style: 'cancel' },
+                ]);
+              }
+            }}
+          >
+            <View style={styles.grantHeader}>
+              <View
+                style={[
+                  styles.avatar,
+                  { backgroundColor: getAvatarColor(p.id) },
+                ]}
+              >
+                <Text style={styles.avatarText}>
+                  {getAvatarInitial(p.display_name)}
+                </Text>
+              </View>
+              <View style={styles.grantInfo}>
+                <Text style={styles.grantName}>{p.display_name}</Text>
+                <View style={styles.badgeRow}>
+                  <View style={[styles.badge, isSelf && styles.selfBadge]}>
+                    <Text
+                      style={[styles.badgeText, isSelf && styles.selfBadgeText]}
+                    >
+                      {getRelationshipLabel(p)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+              <Ionicons
+                name={isSelf ? 'chevron-forward' : 'ellipsis-horizontal'}
+                size={18}
+                color={COLORS.text.tertiary}
+              />
+            </View>
+          </Card>
+        );
+      })}
+      <TouchableOpacity
+        style={styles.addMemberBtn}
+        onPress={() => router.push('/(main)/caregivers/add-member')}
+        activeOpacity={0.7}
+      >
+        <Ionicons name="add-circle-outline" size={20} color={COLORS.primary.DEFAULT} />
+        <Text style={styles.addMemberText}>Add Family Member</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Pending invite card with resend/QR/cancel actions
 // ─────────────────────────────────────────────────────────────────────
 
@@ -218,7 +354,7 @@ function PendingInviteCard({
         }
       },
       onError: (err) => {
-        Alert.alert('Error', err.message);
+        Alert.alert('Could not resend invite', sanitizeErrorMessage(err));
       },
     });
   }
@@ -234,7 +370,7 @@ function PendingInviteCard({
           style: 'destructive',
           onPress: () =>
             cancel.mutate(invite.id, {
-              onError: (err) => Alert.alert('Error', err.message),
+              onError: (err) => Alert.alert('Something went wrong', sanitizeErrorMessage(err)),
             }),
         },
       ],
@@ -394,6 +530,30 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.xs,
     color: COLORS.warning.DEFAULT,
     fontWeight: FONT_WEIGHTS.medium,
+  },
+  selfBadge: {
+    backgroundColor: COLORS.secondary.DEFAULT + '1A',
+  },
+  selfBadgeText: {
+    color: COLORS.secondary.dark,
+  },
+  addMemberBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    marginTop: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.primary.DEFAULT + '33',
+    borderStyle: 'dashed',
+    backgroundColor: COLORS.surface.DEFAULT,
+  },
+  addMemberText: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.primary.DEFAULT,
   },
   grantDate: {
     fontSize: FONT_SIZES.xs,

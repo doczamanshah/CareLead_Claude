@@ -23,6 +23,7 @@ import {
 } from '@/hooks/useResults';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 import type { LabFlag } from '@/lib/types/results';
 import type {
   LabCorrections,
@@ -487,7 +488,7 @@ export default function ReviewResultScreen() {
       { resultId, corrections },
       {
         onSuccess: () => router.back(),
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Could not save', sanitizeErrorMessage(err)),
       },
     );
   }
@@ -509,7 +510,7 @@ export default function ReviewResultScreen() {
           Alert.alert('Confirmed', 'Result confirmed and finalized.');
           router.back();
         },
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Could not save', sanitizeErrorMessage(err)),
       },
     );
   }

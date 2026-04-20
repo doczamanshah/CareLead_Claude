@@ -18,6 +18,8 @@ import { useUploadArtifact } from '@/hooks/useArtifacts';
 import { useTriggerExtraction } from '@/hooks/useIntentSheet';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { safeLog, safeError } from '@/lib/utils/safeLog';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 
 export default function CameraScreen() {
   const router = useRouter();
@@ -66,7 +68,7 @@ export default function CameraScreen() {
           artifactId: artifact.id,
           profileId: activeProfileId,
         });
-        console.log('[camera] Extraction triggered successfully for artifact', artifact.id);
+        safeLog('[camera] Extraction triggered successfully for artifact', artifact.id);
 
         if (extraction.intentSheetId) {
           router.replace(`/(main)/intent-sheet/${extraction.intentSheetId}`);
@@ -74,13 +76,12 @@ export default function CameraScreen() {
         }
       } catch (extractionErr) {
         // Log but don't block navigation — extraction can be retried
-        console.error('[camera] Extraction trigger failed:', extractionErr);
+        safeError('[camera] Extraction trigger failed', extractionErr);
       }
 
       router.replace('/(main)/(tabs)/documents');
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Upload failed';
-      Alert.alert('Upload Error', message);
+      Alert.alert('Upload Error', sanitizeErrorMessage(err, { fallback: 'Upload failed.' }));
     }
   }
 

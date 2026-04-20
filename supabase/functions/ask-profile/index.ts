@@ -4,6 +4,7 @@
 // Requires ANTHROPIC_API_KEY set as a Supabase Edge Function secret.
 
 import { corsHeaders } from "../_shared/cors.ts";
+import { logError } from "../_shared/logging.ts";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-20250514";
@@ -122,8 +123,8 @@ Return the JSON response now.`;
     });
 
     if (!resp.ok) {
-      const errBody = await resp.text();
-      console.error("Claude API error:", resp.status, errBody);
+      await resp.text().catch(() => undefined);
+      logError("ask-profile.claude_error", undefined, { status: resp.status });
       return jsonResponse({ error: "AI query failed" }, 502);
     }
 
@@ -142,7 +143,7 @@ Return the JSON response now.`;
 
     return jsonResponse(parsed);
   } catch (err) {
-    console.error("Unhandled error in ask-profile:", err);
+    logError("ask-profile.unhandled", err);
     return jsonResponse({ error: "Internal server error" }, 500);
   }
 });

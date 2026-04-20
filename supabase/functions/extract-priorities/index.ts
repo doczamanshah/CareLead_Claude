@@ -5,6 +5,7 @@
 // Requires ANTHROPIC_API_KEY set as a Supabase Edge Function secret.
 
 import { corsHeaders } from "../_shared/cors.ts";
+import { logError } from "../_shared/logging.ts";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -122,8 +123,8 @@ Extract structured priorities as JSON. Return JSON only.`;
     });
 
     if (!resp.ok) {
-      const errBody = await resp.text();
-      console.error("Claude API error:", resp.status, errBody);
+      await resp.text().catch(() => undefined);
+      logError("extract-priorities.claude_error", undefined, { status: resp.status });
       return jsonResponse({ error: "AI extraction failed" }, 502);
     }
 
@@ -170,7 +171,7 @@ Extract structured priorities as JSON. Return JSON only.`;
       confidence,
     });
   } catch (err) {
-    console.error("Unhandled error in extract-priorities:", err);
+    logError("extract-priorities.unhandled", err);
     return jsonResponse({ error: "Internal server error" }, 500);
   }
 });

@@ -5,6 +5,7 @@
 // (should already be set from the extract-document function).
 
 import { corsHeaders } from "../_shared/cors.ts";
+import { logError } from "../_shared/logging.ts";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -58,8 +59,8 @@ async function callClaude(
   });
 
   if (!resp.ok) {
-    const errBody = await resp.text();
-    console.error("Claude API error:", resp.status, errBody);
+    await resp.text().catch(() => undefined);
+    logError("generate-appeal-letter.claude_error", undefined, { status: resp.status });
     return { error: `Claude API error: ${resp.status}`, status: 502 };
   }
 
@@ -167,7 +168,7 @@ Deno.serve(async (req: Request) => {
 
     return jsonResponse({ letter: claudeResult.text });
   } catch (err) {
-    console.error("Unhandled error in generate-appeal-letter:", err);
+    logError("generate-appeal-letter.unhandled", err);
     return jsonResponse({ error: "Internal server error" }, 500);
   }
 });

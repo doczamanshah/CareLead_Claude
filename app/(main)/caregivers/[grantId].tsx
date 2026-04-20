@@ -15,6 +15,7 @@ import type { PermissionTemplateId } from '@/lib/constants/permissionTemplates';
 import type { AccessGrantWithName, ConsentRecord } from '@/lib/types/caregivers';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 
 export default function CaregiverDetailScreen() {
   const { grantId } = useLocalSearchParams<{ grantId: string }>();
@@ -54,7 +55,7 @@ export default function CaregiverDetailScreen() {
           onPress: () => {
             revokeAccessMutation.mutate(grant!.id, {
               onSuccess: () => router.back(),
-              onError: (err) => Alert.alert('Error', err.message),
+              onError: (err) => Alert.alert('Something went wrong', sanitizeErrorMessage(err)),
             });
           },
         },
@@ -67,7 +68,7 @@ export default function CaregiverDetailScreen() {
     updatePermissionsMutation.mutate(
       { grantId: grant!.id, newTemplate },
       {
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Something went wrong', sanitizeErrorMessage(err)),
       },
     );
   }

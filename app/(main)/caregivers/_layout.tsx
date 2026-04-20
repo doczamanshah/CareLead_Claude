@@ -23,7 +23,11 @@ export default function CaregiversLayout() {
         contentStyle: { backgroundColor: COLORS.background.DEFAULT },
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Caregivers' }} />
+      <Stack.Screen name="index" options={{ title: 'Family & Caregivers' }} />
+      <Stack.Screen
+        name="add-member"
+        options={{ title: 'Add Family Member', animation: 'slide_from_right' }}
+      />
       <Stack.Screen
         name="invite"
         options={{ title: 'Invite Caregiver', animation: 'slide_from_right' }}

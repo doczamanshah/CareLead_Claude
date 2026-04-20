@@ -16,6 +16,7 @@
  */
 
 import { corsHeaders } from "../_shared/cors.ts";
+import { logError } from "../_shared/logging.ts";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -196,8 +197,8 @@ Deno.serve(async (req: Request) => {
     });
 
     if (!claudeResponse.ok) {
-      const errBody = await claudeResponse.text();
-      console.error("Claude API error:", claudeResponse.status, errBody);
+      await claudeResponse.text().catch(() => undefined);
+      logError("extract-appointment.claude_error", undefined, { status: claudeResponse.status });
       return new Response(
         JSON.stringify({ error: "AI processing failed" }),
         {
@@ -230,7 +231,7 @@ Deno.serve(async (req: Request) => {
         .trim();
       parsed = JSON.parse(cleanJson) as Record<string, unknown>;
     } catch (err) {
-      console.error("Could not parse AI JSON:", err, textBlock.text);
+      logError("extract-appointment.parse_failed", err);
       return new Response(
         JSON.stringify({ error: "AI returned invalid JSON" }),
         {
@@ -263,7 +264,7 @@ Deno.serve(async (req: Request) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
-    console.error("Unhandled error in extract-appointment:", err);
+    logError("extract-appointment.unhandled", err);
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
       {

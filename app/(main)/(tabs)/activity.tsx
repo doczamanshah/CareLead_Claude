@@ -15,8 +15,9 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { useAppointments } from '@/hooks/useAppointments';
-import { COLORS } from '@/lib/constants/colors';
+import { useTheme } from '@/hooks/useTheme';
 import { RADIUS, SPACING, TYPOGRAPHY } from '@/lib/constants/design';
+import type { ThemePalette } from '@/lib/constants/themes';
 import {
   APPOINTMENT_TYPE_LABELS,
   APPOINTMENT_TYPE_ICONS,
@@ -30,28 +31,6 @@ import type {
 } from '@/lib/types/appointments';
 
 type Segment = 'tasks' | 'appointments';
-
-const PREP_STATUS_LABELS: Record<VisitPrepStatus, string> = {
-  not_started: 'Prep: Not started',
-  draft: 'Prep: Draft',
-  ready: 'Prep: Ready ✓',
-};
-
-const PREP_STATUS_COLORS: Record<VisitPrepStatus, string> = {
-  not_started: COLORS.text.tertiary,
-  draft: COLORS.accent.dark,
-  ready: COLORS.success.DEFAULT,
-};
-
-const STATUS_COLORS: Record<AppointmentStatus, string> = {
-  draft: COLORS.text.tertiary,
-  scheduled: COLORS.primary.DEFAULT,
-  preparing: COLORS.accent.dark,
-  ready: COLORS.success.DEFAULT,
-  completed: COLORS.text.tertiary,
-  cancelled: COLORS.error.DEFAULT,
-  rescheduled: COLORS.text.tertiary,
-};
 
 function formatDateTime(iso: string): string {
   const date = new Date(iso);
@@ -83,12 +62,20 @@ function formatDateTime(iso: string): string {
 function AppointmentCard({
   appointment,
   onPress,
+  styles,
+  prepColors,
+  statusColors,
+  prepLabels,
 }: {
   appointment: Appointment;
   onPress: () => void;
+  styles: ReturnType<typeof buildStyles>;
+  prepColors: Record<VisitPrepStatus, string>;
+  statusColors: Record<AppointmentStatus, string>;
+  prepLabels: Record<VisitPrepStatus, string>;
 }) {
   const prepStatus = getPrepStatus(appointment.prep_json);
-  const prepColor = PREP_STATUS_COLORS[prepStatus];
+  const prepColor = prepColors[prepStatus];
   return (
     <Card onPress={onPress} style={styles.appointmentCard}>
       <View style={styles.cardHeader}>
@@ -103,7 +90,7 @@ function AppointmentCard({
             {formatDateTime(appointment.start_time)}
           </Text>
           <Text style={[styles.prepStatusText, { color: prepColor }]}>
-            {PREP_STATUS_LABELS[prepStatus]}
+            {prepLabels[prepStatus]}
           </Text>
         </View>
       </View>
@@ -125,13 +112,13 @@ function AppointmentCard({
         <View
           style={[
             styles.statusBadge,
-            { backgroundColor: STATUS_COLORS[appointment.status] + '1A' },
+            { backgroundColor: statusColors[appointment.status] + '1A' },
           ]}
         >
           <Text
             style={[
               styles.statusBadgeText,
-              { color: STATUS_COLORS[appointment.status] },
+              { color: statusColors[appointment.status] },
             ]}
           >
             {APPOINTMENT_STATUS_LABELS[appointment.status]}
@@ -142,7 +129,19 @@ function AppointmentCard({
   );
 }
 
-function AppointmentsSegment() {
+function AppointmentsSegment({
+  styles,
+  prepColors,
+  statusColors,
+  prepLabels,
+  colors,
+}: {
+  styles: ReturnType<typeof buildStyles>;
+  prepColors: Record<VisitPrepStatus, string>;
+  statusColors: Record<AppointmentStatus, string>;
+  prepLabels: Record<VisitPrepStatus, string>;
+  colors: ThemePalette;
+}) {
   const router = useRouter();
   const { activeProfileId } = useActiveProfile();
   const { data: appointments, isLoading, error } =
@@ -211,7 +210,7 @@ function AppointmentsSegment() {
           <Ionicons
             name="calendar-outline"
             size={48}
-            color={COLORS.text.tertiary}
+            color={colors.text.tertiary}
           />
           <Text style={styles.emptyTitle}>No appointments yet</Text>
           <Text style={styles.emptyBody}>
@@ -229,6 +228,10 @@ function AppointmentsSegment() {
               key={a.id}
               appointment={a}
               onPress={() => router.push(`/(main)/appointments/${a.id}`)}
+              styles={styles}
+              prepColors={prepColors}
+              statusColors={statusColors}
+              prepLabels={prepLabels}
             />
           ))}
         </View>
@@ -245,7 +248,7 @@ function AppointmentsSegment() {
             <Ionicons
               name={pastExpanded ? 'chevron-up' : 'chevron-down'}
               size={16}
-              color={COLORS.text.tertiary}
+              color={colors.text.tertiary}
             />
           </TouchableOpacity>
           {pastExpanded &&
@@ -254,6 +257,10 @@ function AppointmentsSegment() {
                 key={a.id}
                 appointment={a}
                 onPress={() => router.push(`/(main)/appointments/${a.id}`)}
+                styles={styles}
+                prepColors={prepColors}
+                statusColors={statusColors}
+                prepLabels={prepLabels}
               />
             ))}
         </View>
@@ -263,7 +270,37 @@ function AppointmentsSegment() {
 }
 
 export default function ActivityScreen() {
+  const { colors } = useTheme();
   const [segment, setSegment] = useState<Segment>('tasks');
+  const styles = useMemo(() => buildStyles(colors), [colors]);
+
+  const prepLabels: Record<VisitPrepStatus, string> = {
+    not_started: 'Prep: Not started',
+    draft: 'Prep: Draft',
+    ready: 'Prep: Ready ✓',
+  };
+
+  const prepColors: Record<VisitPrepStatus, string> = useMemo(
+    () => ({
+      not_started: colors.text.tertiary,
+      draft: colors.accent.dark,
+      ready: colors.success.DEFAULT,
+    }),
+    [colors],
+  );
+
+  const statusColors: Record<AppointmentStatus, string> = useMemo(
+    () => ({
+      draft: colors.text.tertiary,
+      scheduled: colors.primary.DEFAULT,
+      preparing: colors.accent.dark,
+      ready: colors.success.DEFAULT,
+      completed: colors.text.tertiary,
+      cancelled: colors.error.DEFAULT,
+      rescheduled: colors.text.tertiary,
+    }),
+    [colors],
+  );
 
   const todayLabel = useMemo(() => {
     return new Date().toLocaleDateString('en-US', {
@@ -305,164 +342,176 @@ export default function ActivityScreen() {
       </View>
 
       <View style={styles.body}>
-        {segment === 'tasks' ? <TasksContent /> : <AppointmentsSegment />}
+        {segment === 'tasks' ? (
+          <TasksContent />
+        ) : (
+          <AppointmentsSegment
+            styles={styles}
+            prepColors={prepColors}
+            statusColors={statusColors}
+            prepLabels={prepLabels}
+            colors={colors}
+          />
+        )}
       </View>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: COLORS.background.DEFAULT,
-  },
-  dateRow: {
-    paddingHorizontal: SPACING.xxl,
-    paddingTop: SPACING.md,
-  },
-  dateText: {
-    ...TYPOGRAPHY.h3,
-    color: COLORS.text.DEFAULT,
-  },
-  segmentRow: {
-    flexDirection: 'row',
-    marginHorizontal: SPACING.xxl,
-    marginTop: SPACING.md,
-    marginBottom: SPACING.xs,
-    padding: SPACING.xs,
-    backgroundColor: COLORS.background.subtle,
-    borderRadius: RADIUS.full,
-  },
-  segmentButton: {
-    flex: 1,
-    paddingVertical: SPACING.sm,
-    borderRadius: RADIUS.full,
-    alignItems: 'center',
-  },
-  segmentButtonActive: {
-    backgroundColor: COLORS.primary.DEFAULT,
-  },
-  segmentText: {
-    ...TYPOGRAPHY.buttonSmall,
-    color: COLORS.text.secondary,
-  },
-  segmentTextActive: {
-    color: COLORS.text.inverse,
-  },
-  body: {
-    flex: 1,
-  },
-  scroll: {
-    flex: 1,
-  },
-  appointmentsContent: {
-    paddingHorizontal: SPACING.xxl,
-    paddingTop: SPACING.lg,
-    paddingBottom: 100,
-  },
-  newApptRow: {
-    marginBottom: SPACING.xl,
-  },
-  loadingText: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.text.secondary,
-    textAlign: 'center',
-    marginTop: SPACING.xxl,
-  },
-  errorText: {
-    ...TYPOGRAPHY.body,
-    color: COLORS.status.error,
-    textAlign: 'center',
-    marginTop: SPACING.xxl,
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingTop: 40,
-    paddingHorizontal: SPACING.xxl,
-  },
-  emptyTitle: {
-    ...TYPOGRAPHY.h3,
-    color: COLORS.text.DEFAULT,
-    marginTop: SPACING.md,
-    marginBottom: SPACING.xs + 2,
-  },
-  emptyBody: {
-    ...TYPOGRAPHY.bodySmall,
-    color: COLORS.text.secondary,
-    textAlign: 'center',
-  },
-  section: {
-    marginBottom: SPACING.xxl,
-  },
-  sectionLabel: {
-    ...TYPOGRAPHY.label,
-    color: COLORS.text.secondary,
-    marginBottom: SPACING.md,
-  },
-  collapseHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: SPACING.sm,
-  },
-  appointmentCard: {
-    marginBottom: SPACING.sm + 2,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: SPACING.sm,
-  },
-  icon: {
-    fontSize: 28,
-    marginRight: SPACING.md,
-  },
-  cardHeaderText: {
-    flex: 1,
-  },
-  appointmentTitle: {
-    ...TYPOGRAPHY.h4,
-    color: COLORS.text.DEFAULT,
-  },
-  appointmentDate: {
-    ...TYPOGRAPHY.bodySmall,
-    color: COLORS.text.secondary,
-    marginTop: 2,
-  },
-  prepStatusText: {
-    ...TYPOGRAPHY.label,
-    fontSize: 10,
-    marginTop: SPACING.xs,
-    letterSpacing: 0.4,
-  },
-  providerText: {
-    ...TYPOGRAPHY.bodySmall,
-    color: COLORS.text.secondary,
-    marginBottom: SPACING.xs,
-  },
-  badgeRow: {
-    flexDirection: 'row',
-    gap: SPACING.sm,
-    marginTop: SPACING.xs,
-  },
-  typeBadge: {
-    backgroundColor: COLORS.background.subtle,
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 3,
-    borderRadius: RADIUS.sm - 2,
-  },
-  typeBadgeText: {
-    ...TYPOGRAPHY.caption,
-    fontWeight: '500',
-    color: COLORS.text.secondary,
-  },
-  statusBadge: {
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: 3,
-    borderRadius: RADIUS.sm - 2,
-  },
-  statusBadgeText: {
-    ...TYPOGRAPHY.caption,
-    fontWeight: '600',
-  },
-});
+function buildStyles(colors: ThemePalette) {
+  return StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      backgroundColor: colors.background.DEFAULT,
+    },
+    dateRow: {
+      paddingHorizontal: SPACING.xxl,
+      paddingTop: SPACING.md,
+    },
+    dateText: {
+      ...TYPOGRAPHY.h3,
+      color: colors.text.DEFAULT,
+    },
+    segmentRow: {
+      flexDirection: 'row',
+      marginHorizontal: SPACING.xxl,
+      marginTop: SPACING.md,
+      marginBottom: SPACING.xs,
+      padding: SPACING.xs,
+      backgroundColor: colors.background.subtle,
+      borderRadius: RADIUS.full,
+    },
+    segmentButton: {
+      flex: 1,
+      paddingVertical: SPACING.sm,
+      borderRadius: RADIUS.full,
+      alignItems: 'center',
+    },
+    segmentButtonActive: {
+      backgroundColor: colors.primary.DEFAULT,
+    },
+    segmentText: {
+      ...TYPOGRAPHY.buttonSmall,
+      color: colors.text.secondary,
+    },
+    segmentTextActive: {
+      color: '#FFFFFF',
+    },
+    body: {
+      flex: 1,
+    },
+    scroll: {
+      flex: 1,
+    },
+    appointmentsContent: {
+      paddingHorizontal: SPACING.xxl,
+      paddingTop: SPACING.lg,
+      paddingBottom: 100,
+    },
+    newApptRow: {
+      marginBottom: SPACING.xl,
+    },
+    loadingText: {
+      ...TYPOGRAPHY.body,
+      color: colors.text.secondary,
+      textAlign: 'center',
+      marginTop: SPACING.xxl,
+    },
+    errorText: {
+      ...TYPOGRAPHY.body,
+      color: colors.status.error,
+      textAlign: 'center',
+      marginTop: SPACING.xxl,
+    },
+    emptyState: {
+      alignItems: 'center',
+      paddingTop: 40,
+      paddingHorizontal: SPACING.xxl,
+    },
+    emptyTitle: {
+      ...TYPOGRAPHY.h3,
+      color: colors.text.DEFAULT,
+      marginTop: SPACING.md,
+      marginBottom: SPACING.xs + 2,
+    },
+    emptyBody: {
+      ...TYPOGRAPHY.bodySmall,
+      color: colors.text.secondary,
+      textAlign: 'center',
+    },
+    section: {
+      marginBottom: SPACING.xxl,
+    },
+    sectionLabel: {
+      ...TYPOGRAPHY.label,
+      color: colors.text.secondary,
+      marginBottom: SPACING.md,
+    },
+    collapseHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: SPACING.sm,
+    },
+    appointmentCard: {
+      marginBottom: SPACING.sm + 2,
+    },
+    cardHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: SPACING.sm,
+    },
+    icon: {
+      fontSize: 28,
+      marginRight: SPACING.md,
+    },
+    cardHeaderText: {
+      flex: 1,
+    },
+    appointmentTitle: {
+      ...TYPOGRAPHY.h4,
+      color: colors.text.DEFAULT,
+    },
+    appointmentDate: {
+      ...TYPOGRAPHY.bodySmall,
+      color: colors.text.secondary,
+      marginTop: 2,
+    },
+    prepStatusText: {
+      ...TYPOGRAPHY.label,
+      fontSize: 10,
+      marginTop: SPACING.xs,
+      letterSpacing: 0.4,
+    },
+    providerText: {
+      ...TYPOGRAPHY.bodySmall,
+      color: colors.text.secondary,
+      marginBottom: SPACING.xs,
+    },
+    badgeRow: {
+      flexDirection: 'row',
+      gap: SPACING.sm,
+      marginTop: SPACING.xs,
+    },
+    typeBadge: {
+      backgroundColor: colors.background.subtle,
+      paddingHorizontal: SPACING.sm,
+      paddingVertical: 3,
+      borderRadius: RADIUS.sm - 2,
+    },
+    typeBadgeText: {
+      ...TYPOGRAPHY.caption,
+      fontWeight: '500',
+      color: colors.text.secondary,
+    },
+    statusBadge: {
+      paddingHorizontal: SPACING.sm,
+      paddingVertical: 3,
+      borderRadius: RADIUS.sm - 2,
+    },
+    statusBadgeText: {
+      ...TYPOGRAPHY.caption,
+      fontWeight: '600',
+    },
+  });
+}

@@ -5,6 +5,15 @@ export interface Household {
   updated_at: string;
 }
 
+export type RelationshipLabel =
+  | 'self'
+  | 'parent'
+  | 'spouse'
+  | 'child'
+  | 'sibling'
+  | 'grandparent'
+  | 'other';
+
 export interface Profile {
   id: string;
   household_id: string;
@@ -13,6 +22,7 @@ export interface Profile {
   date_of_birth: string | null;
   gender: string | null;
   relationship: 'self' | 'dependent';
+  relationship_label: RelationshipLabel | null;
   avatar_url: string | null;
   created_at: string;
   updated_at: string;

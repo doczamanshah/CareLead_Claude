@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { AppState, AppStateStatus, View, Image, StyleSheet, Text } from 'react-native';
 import * as Linking from 'expo-linking';
 import { Slot, useRouter, useSegments } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
 import { QueryClient, QueryClientProvider, useQueryClient } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { useInitTheme, useTheme } from '@/hooks/useTheme';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { useProfileStore } from '@/stores/profileStore';
@@ -49,6 +51,9 @@ const queryClient = new QueryClient({
 });
 
 function AuthGate() {
+  // Hydrate stored theme preference + track system color-scheme changes.
+  useInitTheme();
+  const { isDark } = useTheme();
   const { session, isLoading, setSession, setLoading } = useAuthStore();
   const { isLoaded: profilesLoaded, setProfiles } = useProfileStore();
   const {
@@ -379,6 +384,9 @@ function AuthGate() {
 
   return (
     <View style={styles.root}>
+      {/* Default status-bar style. Individual screens (e.g., Home with its
+          branded header) can override with a local <StatusBar/>. */}
+      <StatusBar style={isDark ? 'light' : 'dark'} />
       {showContent ? (
         <Slot />
       ) : (

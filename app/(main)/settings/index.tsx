@@ -51,6 +51,7 @@ import {
 import { cleanupOnSignOut } from '@/services/auth';
 import { logAuthEvent } from '@/services/securityAudit';
 import type { CareGuidanceLevel } from '@/services/commit';
+import { useThemeStore, type ThemeMode } from '@/stores/themeStore';
 
 const GUIDANCE_OPTIONS: {
   key: CareGuidanceLevel;
@@ -115,6 +116,28 @@ const REVIEW_FREQUENCY_OPTIONS: { key: ReviewFrequency; label: string }[] = [
   { key: 'never', label: 'Never' },
 ];
 
+const THEME_MODE_OPTIONS: {
+  key: ThemeMode;
+  label: string;
+  description: string;
+}[] = [
+  {
+    key: 'light',
+    label: 'Light',
+    description: 'Light background with dark text.',
+  },
+  {
+    key: 'dark',
+    label: 'Dark',
+    description: 'Dark background — easier on the eyes at night.',
+  },
+  {
+    key: 'system',
+    label: 'System',
+    description: 'Follow your device setting.',
+  },
+];
+
 function formatLastReviewed(iso: string | null | undefined): string {
   if (!iso) return 'Never reviewed';
   const date = new Date(iso);
@@ -170,6 +193,10 @@ export default function SettingsScreen() {
   } = usePreventiveReminderMode(activeProfileId);
   const [showPreventiveReminderOptions, setShowPreventiveReminderOptions] =
     useState(false);
+
+  const themeMode = useThemeStore((s) => s.mode);
+  const setThemeMode = useThemeStore((s) => s.setMode);
+  const [showThemeOptions, setShowThemeOptions] = useState(false);
 
   const [capability, setCapability] = useState<BiometricCapability | null>(null);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
@@ -393,6 +420,75 @@ export default function SettingsScreen() {
               <Ionicons name="chevron-forward" size={18} color={COLORS.text.tertiary} />
             </TouchableOpacity>
           </View>
+        </View>
+
+        {/* Appearance Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Appearance</Text>
+          <Text style={styles.sectionDescription}>
+            Choose between light and dark mode, or follow your device setting.
+          </Text>
+          <TouchableOpacity
+            style={styles.autoLockRow}
+            activeOpacity={0.7}
+            onPress={() => setShowThemeOptions((v) => !v)}
+          >
+            <View style={styles.autoLockContent}>
+              <Text style={styles.autoLockLabel}>Theme</Text>
+              <Text style={styles.autoLockValue}>
+                {THEME_MODE_OPTIONS.find((o) => o.key === themeMode)?.label ??
+                  'System'}
+              </Text>
+            </View>
+            <Ionicons
+              name={showThemeOptions ? 'chevron-up' : 'chevron-down'}
+              size={20}
+              color={COLORS.text.tertiary}
+            />
+          </TouchableOpacity>
+
+          {showThemeOptions ? (
+            <View style={styles.autoLockOptions}>
+              {THEME_MODE_OPTIONS.map((opt) => {
+                const selected = themeMode === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[
+                      styles.optionCard,
+                      selected && styles.optionCardSelected,
+                    ]}
+                    onPress={() => {
+                      setThemeMode(opt.key);
+                      setShowThemeOptions(false);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.optionRow}>
+                      <View
+                        style={[styles.radio, selected && styles.radioSelected]}
+                      >
+                        {selected && <View style={styles.radioDot} />}
+                      </View>
+                      <View style={styles.optionContent}>
+                        <Text
+                          style={[
+                            styles.optionLabel,
+                            selected && styles.optionLabelSelected,
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                        <Text style={styles.optionDescription}>
+                          {opt.description}
+                        </Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : null}
         </View>
 
         {/* Security Section */}
@@ -886,11 +982,37 @@ export default function SettingsScreen() {
         {/* Account Section */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Account</Text>
-          <Button
-            title="Sign Out"
-            onPress={handleSignOut}
-            variant="outline"
-          />
+          <TouchableOpacity
+            style={styles.autoLockRow}
+            activeOpacity={0.7}
+            onPress={() => router.push('/(main)/settings/export-data')}
+          >
+            <View style={styles.autoLockContent}>
+              <Text style={styles.autoLockLabel}>Export My Data</Text>
+              <Text style={styles.autoLockValue}>
+                Share or save a copy of everything CareLead has on file
+              </Text>
+            </View>
+            <Ionicons
+              name="chevron-forward"
+              size={18}
+              color={COLORS.text.tertiary}
+            />
+          </TouchableOpacity>
+          <View style={styles.pinWrap}>
+            <Button
+              title="Sign Out"
+              onPress={handleSignOut}
+              variant="outline"
+            />
+          </View>
+          <TouchableOpacity
+            style={styles.deleteAccountRow}
+            activeOpacity={0.7}
+            onPress={() => router.push('/(main)/settings/delete-account')}
+          >
+            <Text style={styles.deleteAccountText}>Delete Account</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -1082,6 +1204,16 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   pinRemoveLabel: {
+    color: COLORS.error.DEFAULT,
+  },
+  deleteAccountRow: {
+    marginTop: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  deleteAccountText: {
+    fontSize: FONT_SIZES.base,
+    fontWeight: FONT_WEIGHTS.semibold,
     color: COLORS.error.DEFAULT,
   },
 });

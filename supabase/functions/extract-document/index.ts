@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { logError } from "../_shared/logging.ts";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -308,8 +309,9 @@ Deno.serve(async (req: Request) => {
     });
 
     if (!claudeResponse.ok) {
-      const errBody = await claudeResponse.text();
-      console.error("Claude API error:", claudeResponse.status, errBody);
+      // Drain the body but never log it — may echo the prompt or input text.
+      await claudeResponse.text().catch(() => undefined);
+      logError("extract-document.claude_error", undefined, { status: claudeResponse.status });
       await markFailed(supabase, artifactId, `Claude API error: ${claudeResponse.status}`);
       return new Response(
         JSON.stringify({ error: "AI extraction failed" }),
@@ -386,7 +388,7 @@ Deno.serve(async (req: Request) => {
       .insert(extractedFieldRows);
 
     if (fieldsError) {
-      console.error("Error inserting extracted fields:", fieldsError);
+      logError("extract-document.insert_fields_failed", fieldsError);
       await markFailed(supabase, artifactId, "Failed to store extracted fields");
       return new Response(
         JSON.stringify({ error: "Failed to store extraction results" }),
@@ -407,7 +409,7 @@ Deno.serve(async (req: Request) => {
       .single();
 
     if (sheetError || !intentSheet) {
-      console.error("Error creating intent sheet:", sheetError);
+      logError("extract-document.create_sheet_failed", sheetError);
       await markFailed(supabase, artifactId, "Failed to create intent sheet");
       return new Response(
         JSON.stringify({ error: "Failed to create review sheet" }),
@@ -432,7 +434,7 @@ Deno.serve(async (req: Request) => {
       .insert(intentItemRows);
 
     if (itemsError) {
-      console.error("Error creating intent items:", itemsError);
+      logError("extract-document.create_items_failed", itemsError);
       // Intent sheet exists but items failed — still update artifact as completed
       // so user can see something happened
     }
@@ -456,7 +458,7 @@ Deno.serve(async (req: Request) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
   } catch (err) {
-    console.error("Unhandled error in extract-document:", err);
+    logError("extract-document.unhandled", err);
     return new Response(
       JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -471,7 +473,9 @@ async function markFailed(
   artifactId: string,
   reason: string,
 ) {
-  console.error(`Extraction failed for artifact ${artifactId}: ${reason}`);
+  // Log the reason (a static, developer-authored string) with the artifact
+  // ID — never the extracted content itself.
+  logError("extract-document.mark_failed", undefined, { artifactId, reason });
   await supabase
     .from("artifacts")
     .update({ processing_status: "failed" })

@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { View, TouchableOpacity, StyleSheet, ViewStyle } from 'react-native';
-import { COLORS } from '@/lib/constants/colors';
+import { useTheme } from '@/hooks/useTheme';
 import { RADIUS, SHADOWS, SPACING } from '@/lib/constants/design';
+import type { ThemePalette } from '@/lib/constants/themes';
 
 type CardVariant = 'default' | 'elevated' | 'outlined' | 'accent';
 type CardPadding = 'sm' | 'md' | 'lg' | 'none';
@@ -24,9 +26,13 @@ const PADDING_MAP: Record<CardPadding, number> = {
   lg: SPACING.xl, // 20
 };
 
-function baseStyleFor(variant: CardVariant, accentColor?: string): ViewStyle {
+function baseStyleFor(
+  variant: CardVariant,
+  colors: ThemePalette,
+  accentColor?: string,
+): ViewStyle {
   const common: ViewStyle = {
-    backgroundColor: COLORS.background.card,
+    backgroundColor: colors.background.card,
     borderRadius: RADIUS.lg,
     overflow: 'hidden',
   };
@@ -37,14 +43,14 @@ function baseStyleFor(variant: CardVariant, accentColor?: string): ViewStyle {
       return {
         ...common,
         borderWidth: 1,
-        borderColor: COLORS.border.DEFAULT,
+        borderColor: colors.border.DEFAULT,
       };
     case 'accent':
       return {
         ...common,
         ...SHADOWS.sm,
         borderLeftWidth: 4,
-        borderLeftColor: accentColor ?? COLORS.primary.DEFAULT,
+        borderLeftColor: accentColor ?? colors.primary.DEFAULT,
       };
     case 'default':
     default:
@@ -62,7 +68,11 @@ export function Card({
   accentColor,
   padding = 'md',
 }: CardProps) {
-  const base = baseStyleFor(variant, accentColor);
+  const { colors } = useTheme();
+  const base = useMemo(
+    () => baseStyleFor(variant, colors, accentColor),
+    [variant, colors, accentColor],
+  );
   const paddingStyle: ViewStyle = { padding: PADDING_MAP[padding] };
 
   if (onPress || onLongPress) {
@@ -82,10 +92,11 @@ export function Card({
   return <View style={[base, paddingStyle, style]}>{children}</View>;
 }
 
-// Export the legacy flat-style for any caller that composes it manually.
+// Legacy flat-style export kept for callers that compose it manually — uses
+// the light palette and is not theme-aware. Prefer <Card/> in new code.
 export const cardStyles = StyleSheet.create({
   card: {
-    backgroundColor: COLORS.background.card,
+    backgroundColor: '#FFFFFF',
     borderRadius: RADIUS.lg,
     padding: SPACING.lg,
     ...SHADOWS.sm,

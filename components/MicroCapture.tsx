@@ -19,6 +19,7 @@ import { useAuth } from '@/hooks/useAuth';
 import type { QuickActionType } from '@/services/smartEnrichment';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 
 interface MicroCaptureProps {
   quickAction: QuickActionType;
@@ -155,7 +156,7 @@ function ConfirmMeds({
       setDone(true);
       setTimeout(onComplete, 700);
     } catch (err) {
-      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to confirm');
+      Alert.alert('Could not save', sanitizeErrorMessage(err, { fallback: "Couldn't confirm. Please try again." }));
     } finally {
       setSaving(false);
     }
@@ -230,7 +231,7 @@ function ConfirmAllergies({
           setDone(true);
           setTimeout(onComplete, 700);
         },
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Could not save', sanitizeErrorMessage(err)),
       },
     );
   };
@@ -305,7 +306,7 @@ function AddSingleMed({
             },
           );
         },
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Could not save', sanitizeErrorMessage(err)),
       },
     );
   };
@@ -377,7 +378,7 @@ function AddAllergy({
           setDone(true);
           setTimeout(onComplete, 700);
         },
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Could not save', sanitizeErrorMessage(err)),
       },
     );
   };
@@ -471,7 +472,7 @@ function SetDob({
           setDone(true);
           setTimeout(onComplete, 700);
         },
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Could not save', sanitizeErrorMessage(err)),
       },
     );
   };
@@ -522,7 +523,7 @@ function SetSex({
           setDone(true);
           setTimeout(onComplete, 700);
         },
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Could not save', sanitizeErrorMessage(err)),
       },
     );
   };
@@ -592,7 +593,7 @@ function AddPharmacy({
           setDone(true);
           setTimeout(onComplete, 700);
         },
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Could not save', sanitizeErrorMessage(err)),
       },
     );
   };
@@ -667,7 +668,7 @@ function AddEmergencyContact({
           setDone(true);
           setTimeout(onComplete, 700);
         },
-        onError: (err) => Alert.alert('Error', err.message),
+        onError: (err) => Alert.alert('Could not save', sanitizeErrorMessage(err)),
       },
     );
   };

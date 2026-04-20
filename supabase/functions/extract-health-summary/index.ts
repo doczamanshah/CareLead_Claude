@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { logError } from "../_shared/logging.ts";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 
@@ -179,7 +180,7 @@ Deno.serve(async (req: Request) => {
 
     return json({ summary: extraction });
   } catch (err) {
-    console.error("Unhandled error in extract-health-summary:", err);
+    logError("extract-health-summary.unhandled", err);
     return json({ error: "Internal server error" }, 500);
   }
 });
@@ -279,7 +280,8 @@ async function extractFromMedia(
   });
 
   if (!res.ok) {
-    console.error("Claude API error:", res.status, await res.text());
+    await res.text().catch(() => undefined);
+    logError("extract-health-summary.claude_error_file", undefined, { status: res.status });
     return null;
   }
   const result = await res.json();
@@ -315,7 +317,8 @@ async function extractFromText(text: string): Promise<ExtractionResult | null> {
   });
 
   if (!res.ok) {
-    console.error("Claude API error:", res.status, await res.text());
+    await res.text().catch(() => undefined);
+    logError("extract-health-summary.claude_error_text", undefined, { status: res.status });
     return null;
   }
   const result = await res.json();
@@ -336,7 +339,7 @@ function parseClaudeJson(claudeResult: {
     const parsed = JSON.parse(clean);
     return normalizeExtraction(parsed);
   } catch (err) {
-    console.error("Failed to parse Claude JSON:", err);
+    logError("extract-health-summary.parse_failed", err);
     return null;
   }
 }
@@ -554,7 +557,7 @@ function parseCcdaXml(xml: string): ExtractionResult | null {
     extraction.overall_confidence = hasAnyData(extraction) ? 0.85 : 0.2;
     return extraction;
   } catch (err) {
-    console.error("CCDA parse error:", err);
+    logError("extract-health-summary.ccda_parse_error", err);
     return null;
   }
 }

@@ -1,14 +1,17 @@
+import { useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Card } from '@/components/ui/Card';
 import { useTodayCard } from '@/hooks/useHomeScreen';
-import { COLORS } from '@/lib/constants/colors';
+import { useTheme } from '@/hooks/useTheme';
 import { RADIUS, SPACING, TYPOGRAPHY } from '@/lib/constants/design';
 
 export function TodayCard() {
   const router = useRouter();
   const data = useTodayCard();
+  const { colors } = useTheme();
+  const styles = useMemo(() => buildStyles(colors), [colors]);
 
   const handlePress = () => {
     if (!data.route) return;
@@ -33,7 +36,7 @@ export function TodayCard() {
         </View>
         <View style={styles.textWrap}>
           <Text
-            style={[styles.title, isAllClear && { color: COLORS.status.success }]}
+            style={[styles.title, isAllClear && { color: colors.status.success }]}
             numberOfLines={1}
           >
             {data.title}
@@ -59,42 +62,44 @@ export function TodayCard() {
   );
 }
 
-const styles = StyleSheet.create({
-  content: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.lg,
-    minHeight: 80,
-    gap: SPACING.md,
-  },
-  iconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: RADIUS.full,
-    backgroundColor: COLORS.background.subtle,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  textWrap: {
-    flex: 1,
-  },
-  title: {
-    ...TYPOGRAPHY.h4,
-    color: COLORS.text.DEFAULT,
-  },
-  detail: {
-    ...TYPOGRAPHY.bodySmall,
-    color: COLORS.text.secondary,
-    marginTop: 2,
-  },
-  actionButton: {
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.sm,
-    borderRadius: RADIUS.sm,
-  },
-  actionText: {
-    ...TYPOGRAPHY.buttonSmall,
-    color: COLORS.text.inverse,
-  },
-});
+function buildStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    content: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: SPACING.lg,
+      paddingVertical: SPACING.lg,
+      minHeight: 80,
+      gap: SPACING.md,
+    },
+    iconWrap: {
+      width: 40,
+      height: 40,
+      borderRadius: RADIUS.full,
+      backgroundColor: colors.background.subtle,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    textWrap: {
+      flex: 1,
+    },
+    title: {
+      ...TYPOGRAPHY.h4,
+      color: colors.text.DEFAULT,
+    },
+    detail: {
+      ...TYPOGRAPHY.bodySmall,
+      color: colors.text.secondary,
+      marginTop: 2,
+    },
+    actionButton: {
+      paddingHorizontal: SPACING.lg,
+      paddingVertical: SPACING.sm,
+      borderRadius: RADIUS.sm,
+    },
+    actionText: {
+      ...TYPOGRAPHY.buttonSmall,
+      color: '#FFFFFF',
+    },
+  });
+}

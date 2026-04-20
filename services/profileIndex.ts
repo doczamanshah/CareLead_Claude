@@ -23,6 +23,7 @@ import type {
 } from '@/lib/types/ask';
 import { emptyFactCounts, emptyPreComputedAnswers } from '@/lib/types/ask';
 import { formatLabValue } from '@/lib/utils/formatLabValue';
+import { safeWarn } from '@/lib/utils/safeLog';
 
 type ServiceResult<T> =
   | { success: true; data: T }
@@ -792,7 +793,7 @@ export async function buildProfileIndex(
     if (result.status === 'fulfilled') {
       facts.push(...result.value);
     } else {
-      console.warn('[profileIndex] builder failed:', result.reason);
+      safeWarn('[profileIndex] builder failed', result.reason);
     }
   }
 

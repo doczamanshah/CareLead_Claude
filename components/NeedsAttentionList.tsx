@@ -1,8 +1,10 @@
+import { useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SectionHeader } from '@/components/ui/SectionHeader';
-import { COLORS } from '@/lib/constants/colors';
+import { useTheme } from '@/hooks/useTheme';
 import { RADIUS, SHADOWS, SPACING, TYPOGRAPHY } from '@/lib/constants/design';
+import type { ThemePalette } from '@/lib/constants/themes';
 import type { NeedsAttentionItem } from '@/services/needsAttention';
 
 interface NeedsAttentionListProps {
@@ -19,6 +21,8 @@ export function NeedsAttentionList({
   viewMoreRoute = '/(main)/today',
 }: NeedsAttentionListProps) {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => buildStyles(colors), [colors]);
 
   if (items.length === 0) return null;
 
@@ -67,48 +71,50 @@ export function NeedsAttentionList({
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    width: '100%',
-  },
-  card: {
-    backgroundColor: COLORS.background.card,
-    borderRadius: RADIUS.md,
-    overflow: 'hidden',
-    ...SHADOWS.sm,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.md - 2,
-    minHeight: 44,
-    gap: SPACING.md - 2,
-  },
-  rowDivider: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: COLORS.border.light,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  title: {
-    flex: 1,
-    ...TYPOGRAPHY.body,
-    color: COLORS.text.DEFAULT,
-  },
-  action: {
-    ...TYPOGRAPHY.buttonSmall,
-    color: COLORS.primary.DEFAULT,
-  },
-  viewMoreRow: {
-    paddingVertical: SPACING.md - 2,
-    alignItems: 'center',
-  },
-  viewMoreText: {
-    ...TYPOGRAPHY.buttonSmall,
-    color: COLORS.primary.DEFAULT,
-  },
-});
+function buildStyles(colors: ThemePalette) {
+  return StyleSheet.create({
+    container: {
+      width: '100%',
+    },
+    card: {
+      backgroundColor: colors.background.card,
+      borderRadius: RADIUS.md,
+      overflow: 'hidden',
+      ...SHADOWS.sm,
+    },
+    row: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: SPACING.lg,
+      paddingVertical: SPACING.md - 2,
+      minHeight: 44,
+      gap: SPACING.md - 2,
+    },
+    rowDivider: {
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border.light,
+    },
+    dot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+    },
+    title: {
+      flex: 1,
+      ...TYPOGRAPHY.body,
+      color: colors.text.DEFAULT,
+    },
+    action: {
+      ...TYPOGRAPHY.buttonSmall,
+      color: colors.primary.DEFAULT,
+    },
+    viewMoreRow: {
+      paddingVertical: SPACING.md - 2,
+      alignItems: 'center',
+    },
+    viewMoreText: {
+      ...TYPOGRAPHY.buttonSmall,
+      color: colors.primary.DEFAULT,
+    },
+  });
+}

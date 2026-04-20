@@ -23,6 +23,7 @@ import { PERMISSION_TEMPLATES } from '@/lib/constants/permissionTemplates';
 import type { PermissionTemplateId } from '@/lib/constants/permissionTemplates';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 
 type Step = 'who' | 'what' | 'review' | 'success';
 type ContactMethod = 'phone' | 'email';
@@ -195,7 +196,7 @@ export default function InviteCaregiverScreen() {
           }
         },
         onError: (err) => {
-          Alert.alert('Error', err.message);
+          Alert.alert('Could not send invite', sanitizeErrorMessage(err));
         },
       },
     );

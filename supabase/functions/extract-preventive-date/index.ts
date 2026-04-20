@@ -5,6 +5,7 @@
 // (shared with other extract-* functions).
 
 import { corsHeaders } from "../_shared/cors.ts";
+import { logError } from "../_shared/logging.ts";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const MAX_BASE64_LENGTH = Math.ceil((20 * 1024 * 1024 * 4) / 3); // ~20MB decoded
@@ -142,8 +143,8 @@ Deno.serve(async (req: Request) => {
     });
 
     if (!resp.ok) {
-      const errBody = await resp.text();
-      console.error("Claude API error:", resp.status, errBody);
+      await resp.text().catch(() => undefined);
+      logError("extract-preventive-date.claude_error", undefined, { status: resp.status });
       return jsonResponse({ error: "AI extraction failed" }, 502);
     }
 
@@ -182,7 +183,7 @@ Deno.serve(async (req: Request) => {
       evidence_text: evidenceText,
     });
   } catch (err) {
-    console.error("Unhandled error in extract-preventive-date:", err);
+    logError("extract-preventive-date.unhandled", err);
     return jsonResponse({ error: "Internal server error" }, 500);
   }
 });

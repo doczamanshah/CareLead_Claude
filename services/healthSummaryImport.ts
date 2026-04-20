@@ -13,6 +13,7 @@ import { supabase } from '@/lib/supabase';
 import { uploadArtifact } from '@/services/artifacts';
 import { createMedication } from '@/services/medications';
 import { createResult } from '@/services/results';
+import { safeWarn } from '@/lib/utils/safeLog';
 import type { ProfileFact } from '@/lib/types/profile';
 
 type ServiceResult<T> =
@@ -519,7 +520,7 @@ export async function commitHealthSummaryImport(
       try {
         await matchAndCompletePreventive(profileId, userId, i.name, i.date);
       } catch (e) {
-        console.warn('preventive match failed', e);
+        safeWarn('preventive match failed', e);
       }
     }
   }

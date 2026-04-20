@@ -1,5 +1,7 @@
+import { useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { TabHeader } from '@/components/ui/TabHeader';
 import { TodayCard } from '@/components/TodayCard';
 import { QuickActionsGrid } from '@/components/QuickActionsGrid';
@@ -9,7 +11,8 @@ import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePrefetchProfileIndex } from '@/hooks/useAsk';
 import { useNeedsAttention } from '@/hooks/useHomeScreen';
 import { useHomeSideEffects } from '@/hooks/useHomeSideEffects';
-import { COLORS } from '@/lib/constants/colors';
+import { useTheme } from '@/hooks/useTheme';
+import { useAuthStore } from '@/stores/authStore';
 import { SPACING, TYPOGRAPHY } from '@/lib/constants/design';
 
 function getGreeting(): string {
@@ -19,14 +22,18 @@ function getGreeting(): string {
   return 'Good evening';
 }
 
-function getFirstName(displayName: string | null | undefined): string | null {
-  if (!displayName) return null;
-  const first = displayName.trim().split(' ')[0];
+function getAccountHolderFirstName(
+  fullName: string | null | undefined,
+): string | null {
+  if (!fullName) return null;
+  const first = fullName.trim().split(' ')[0];
   return first || null;
 }
 
 export default function HomeScreen() {
+  const { colors } = useTheme();
   const { activeProfile, activeProfileId } = useActiveProfile();
+  const user = useAuthStore((s) => s.user);
 
   // Pre-build the Ask profile index so the first Ask query feels instant.
   usePrefetchProfileIndex(activeProfileId, activeProfile?.household_id ?? null);
@@ -34,11 +41,11 @@ export default function HomeScreen() {
   const { items: needsAttentionItems, totalCount: needsAttentionTotal } =
     useNeedsAttention(3);
 
-  // One-time prompts + background migrations live in their own hook so
-  // this screen file stays focused on layout.
   const { isCaregiver } = useHomeSideEffects();
 
-  const firstName = getFirstName(activeProfile?.display_name);
+  const accountHolderName =
+    (user?.user_metadata?.full_name as string | undefined) ?? null;
+  const firstName = getAccountHolderFirstName(accountHolderName);
   const greeting = firstName ? `${getGreeting()}, ${firstName}` : getGreeting();
   const dateLabel = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
@@ -47,15 +54,20 @@ export default function HomeScreen() {
     year: 'numeric',
   });
 
+  const styles = useMemo(() => buildStyles(colors), [colors]);
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <TabHeader title="Home" />
+      {/* Status bar is always light-content on Home because the branded
+          header sits behind the system status bar. */}
+      <StatusBar style="light" />
+      <TabHeader title="Home" variant="branded" />
       <ScrollView
         style={styles.flex}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* ZONE 1: GREETING */}
+        {/* ZONE 1: GREETING (centered, account holder's first name) */}
         <View style={styles.greetingZone}>
           <Text style={styles.greeting} numberOfLines={1}>
             {greeting}
@@ -96,38 +108,48 @@ export default function HomeScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: COLORS.background.DEFAULT,
-  },
-  flex: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: SPACING.xxl,
-    paddingBottom: SPACING.xxxl,
-  },
-  greetingZone: {
-    paddingTop: SPACING.xxxl,
-    paddingBottom: SPACING.xxl,
-  },
-  greeting: {
-    ...TYPOGRAPHY.h1,
-    color: COLORS.text.DEFAULT,
-  },
-  dateLine: {
-    ...TYPOGRAPHY.bodySmall,
-    color: COLORS.text.secondary,
-    marginTop: SPACING.xs,
-  },
-  caregiverLine: {
-    ...TYPOGRAPHY.caption,
-    color: COLORS.text.tertiary,
-    marginTop: SPACING.sm,
-    fontStyle: 'italic',
-  },
-  zone: {
-    marginBottom: SPACING.xxl + SPACING.xs,
-  },
-});
+function buildStyles(colors: ReturnType<typeof useTheme>['colors']) {
+  return StyleSheet.create({
+    safeArea: {
+      flex: 1,
+      // SafeArea paints the gutter above the status bar — keep it branded
+      // so the notch matches the header.
+      backgroundColor: colors.primary.DEFAULT,
+    },
+    flex: {
+      flex: 1,
+      backgroundColor: colors.background.DEFAULT,
+    },
+    scrollContent: {
+      paddingHorizontal: SPACING.xxl,
+      paddingBottom: SPACING.xxxl,
+      backgroundColor: colors.background.DEFAULT,
+    },
+    greetingZone: {
+      paddingTop: SPACING.xxxl,
+      paddingBottom: SPACING.xxl,
+      alignItems: 'center',
+    },
+    greeting: {
+      ...TYPOGRAPHY.h1,
+      color: colors.text.DEFAULT,
+      textAlign: 'center',
+    },
+    dateLine: {
+      ...TYPOGRAPHY.bodySmall,
+      color: colors.text.secondary,
+      marginTop: SPACING.xs,
+      textAlign: 'center',
+    },
+    caregiverLine: {
+      ...TYPOGRAPHY.caption,
+      color: colors.text.tertiary,
+      marginTop: SPACING.sm,
+      fontStyle: 'italic',
+      textAlign: 'center',
+    },
+    zone: {
+      marginBottom: SPACING.xxl + SPACING.xs,
+    },
+  });
+}

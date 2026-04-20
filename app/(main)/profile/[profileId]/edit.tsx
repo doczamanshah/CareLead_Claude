@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button';
 import { useProfileDetail, useUpdateProfile } from '@/hooks/useProfileDetail';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { sanitizeErrorMessage } from '@/lib/utils/sanitizeError';
 
 const GENDER_OPTIONS = ['Male', 'Female', 'Non-binary', 'Prefer not to say'];
 
@@ -50,7 +51,7 @@ export default function EditProfileScreen() {
           router.back();
         },
         onError: (err) => {
-          Alert.alert('Error', err.message);
+          Alert.alert('Could not save', sanitizeErrorMessage(err));
         },
       },
     );

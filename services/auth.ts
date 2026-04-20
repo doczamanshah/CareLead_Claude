@@ -8,6 +8,7 @@ import { cancelAllReminders } from '@/lib/utils/notifications';
 import { useAuthStore } from '@/stores/authStore';
 import { useProfileStore } from '@/stores/profileStore';
 import { useLockStore } from '@/stores/lockStore';
+import { clearWellnessVisitPersisted } from '@/stores/wellnessVisitStore';
 
 type ServiceResult<T> =
   | { success: true; data: T }
@@ -158,6 +159,7 @@ export async function cleanupOnSignOut(options: CleanupOptions = {}): Promise<vo
   await Promise.all([
     clearAllSecurityPreferences(),
     clearPendingInviteToken(),
+    clearWellnessVisitPersisted(),
   ]);
 
   try {
@@ -174,6 +176,39 @@ export async function cleanupOnSignOut(options: CleanupOptions = {}): Promise<vo
   } catch {
     // Even if the server call fails, local state is already cleaned.
   }
+}
+
+/**
+ * Permanently delete the caller's account data from the public schema and
+ * then sign the user out. Backed by the `delete_user_account()` RPC.
+ *
+ * The RPC runs with SECURITY DEFINER and wipes every row tied to
+ * households where the caller is the only active member. For shared
+ * households it only removes the caller's membership and access grants;
+ * the remaining members retain their own data.
+ *
+ * The caller's `auth.users` row is NOT deleted here — that requires the
+ * service role and is intended to be handled by an admin/cron job or a
+ * dedicated Edge Function. The immediate sign-out + local cleanup below
+ * ensures the lingering auth row cannot be used on this device.
+ */
+export async function deleteAccount(
+  options: { queryClient?: QueryClient } = {},
+): Promise<ServiceResult<void>> {
+  const { error } = await supabase.rpc('delete_user_account');
+  if (error) {
+    return { success: false, error: error.message, code: error.code };
+  }
+
+  // Sign the user out and clear all local stores so the app returns to the
+  // welcome screen with no residual state.
+  await cleanupOnSignOut({
+    queryClient: options.queryClient,
+    logAudit: false,
+    reason: 'account_deleted',
+  });
+
+  return { success: true, data: undefined };
 }
 
 /**
