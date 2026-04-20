@@ -27,19 +27,20 @@ export default function PacketScreen() {
   const hydrate = useWellnessVisitStore((s) => s.hydrate);
   const hydrated = useWellnessVisitStore((s) => s.hydrated);
   const markPacketGenerated = useWellnessVisitStore((s) => s.markPacketGenerated);
-  const wellness = useWellnessVisitStore((s) => ({
-    currentVisitId: s.currentVisitId,
-    freeformInput: s.freeformInput,
-    extractedData: s.extractedData,
-    profileReviewCompleted: s.profileReviewCompleted,
-    profileChanges: s.profileChanges,
-    selectedScreenings: s.selectedScreenings,
-    questions: s.questions,
-    packetGenerated: s.packetGenerated,
-    stepsCompleted: s.stepsCompleted,
-    createdAt: s.createdAt,
-    appointmentId: s.appointmentId,
-  }));
+  // Select each field individually. Returning an object/array from a Zustand
+  // selector creates a new reference every render and triggers an infinite
+  // re-render loop.
+  const currentVisitId = useWellnessVisitStore((s) => s.currentVisitId);
+  const freeformInput = useWellnessVisitStore((s) => s.freeformInput);
+  const extractedData = useWellnessVisitStore((s) => s.extractedData);
+  const profileReviewCompleted = useWellnessVisitStore((s) => s.profileReviewCompleted);
+  const profileChanges = useWellnessVisitStore((s) => s.profileChanges);
+  const selectedScreenings = useWellnessVisitStore((s) => s.selectedScreenings);
+  const questions = useWellnessVisitStore((s) => s.questions);
+  const packetGenerated = useWellnessVisitStore((s) => s.packetGenerated);
+  const stepsCompleted = useWellnessVisitStore((s) => s.stepsCompleted);
+  const createdAt = useWellnessVisitStore((s) => s.createdAt);
+  const appointmentId = useWellnessVisitStore((s) => s.appointmentId);
 
   const [packet, setPacket] = useState<WellnessPacket | null>(null);
   const [building, setBuilding] = useState(false);
@@ -52,9 +53,22 @@ export default function PacketScreen() {
     if (!activeProfileId) return;
     setBuilding(true);
     try {
+      const prep = {
+        currentVisitId,
+        freeformInput,
+        extractedData,
+        profileReviewCompleted,
+        profileChanges,
+        selectedScreenings,
+        questions,
+        packetGenerated,
+        stepsCompleted,
+        createdAt,
+        appointmentId,
+      };
       const res = await buildWellnessPacket({
         profileId: activeProfileId,
-        prep: wellness,
+        prep,
       });
       if (!res.success) {
         Alert.alert('Could not generate', res.error);
@@ -65,7 +79,21 @@ export default function PacketScreen() {
     } finally {
       setBuilding(false);
     }
-  }, [activeProfileId, wellness, markPacketGenerated]);
+  }, [
+    activeProfileId,
+    currentVisitId,
+    freeformInput,
+    extractedData,
+    profileReviewCompleted,
+    profileChanges,
+    selectedScreenings,
+    questions,
+    packetGenerated,
+    stepsCompleted,
+    createdAt,
+    appointmentId,
+    markPacketGenerated,
+  ]);
 
   const handleShare = useCallback(async () => {
     if (!packet) return;

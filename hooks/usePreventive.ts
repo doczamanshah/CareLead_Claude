@@ -92,6 +92,10 @@ export function useRunScan() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['preventive', 'items', data.profileId] });
       queryClient.invalidateQueries({ queryKey: ['preventive', 'briefing', data.profileId] });
+      // Metrics and wellness bundle have their own query keys and their own
+      // fetches — invalidate them so the dashboard reflects post-scan archival.
+      queryClient.invalidateQueries({ queryKey: ['preventive', 'metrics', data.profileId] });
+      queryClient.invalidateQueries({ queryKey: ['preventive', 'wellnessBundle', data.profileId] });
     },
   });
 }
@@ -131,6 +135,8 @@ function invalidatePreventiveCaches(
   queryClient.invalidateQueries({ queryKey: ['preventive', 'item', itemId] });
   queryClient.invalidateQueries({ queryKey: ['preventive', 'itemEvents', itemId] });
   queryClient.invalidateQueries({ queryKey: ['preventive', 'briefing', profileId] });
+  queryClient.invalidateQueries({ queryKey: ['preventive', 'metrics', profileId] });
+  queryClient.invalidateQueries({ queryKey: ['preventive', 'wellnessBundle', profileId] });
 }
 
 export function useUpdateLastDoneDate() {
