@@ -25,6 +25,7 @@ import type {
   UpdateAppointmentParams,
   VisitPrep,
 } from '@/lib/types/appointments';
+import { invalidateAskByDomain } from '@/services/askInvalidation';
 
 export function useAppointments(profileId: string | null, filters?: AppointmentFilter) {
   return useQuery({
@@ -65,6 +66,7 @@ export function useCreateAppointment() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['appointments', 'list', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'appointments');
     },
   });
 }
@@ -89,6 +91,7 @@ export function useUpdateAppointment() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['appointments', 'list', data.profile_id] });
       queryClient.invalidateQueries({ queryKey: ['appointments', 'detail', data.id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'appointments');
     },
   });
 }
@@ -107,6 +110,7 @@ export function useCancelAppointment() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['appointments', 'list', data.profile_id] });
       queryClient.invalidateQueries({ queryKey: ['appointments', 'detail', data.id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'appointments');
     },
   });
 }
@@ -130,6 +134,7 @@ export function useRescheduleAppointment() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['appointments', 'list', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'appointments');
     },
   });
 }

@@ -18,9 +18,10 @@ import type {
   FactProvenance,
   FactProvenanceSource,
   FactStatus,
+  PreComputedAnswers,
   ProfileIndex,
 } from '@/lib/types/ask';
-import { emptyFactCounts } from '@/lib/types/ask';
+import { emptyFactCounts, emptyPreComputedAnswers } from '@/lib/types/ask';
 import { formatLabValue } from '@/lib/utils/formatLabValue';
 
 type ServiceResult<T> =
@@ -802,6 +803,8 @@ export async function buildProfileIndex(
     factCounts[f.domain] = (factCounts[f.domain] ?? 0) + 1;
   }
 
+  const preComputedAnswers = computePreComputedAnswers(facts);
+
   return {
     success: true,
     data: {
@@ -810,6 +813,209 @@ export async function buildProfileIndex(
       facts,
       lastBuilt: new Date().toISOString(),
       factCounts,
+      preComputedAnswers,
     },
   };
+}
+
+// ── Pre-computed answers ───────────────────────────────────────────────────
+//
+// Walked once over the assembled fact list. Zero extra DB queries — we already
+// fetched everything. Engine code uses these snapshots as a fast path for the
+// most common queries while still being able to fall back to the full index.
+
+function pickLatestLab(facts: CanonicalFact[], analyteKeys: string[]): CanonicalFact | null {
+  const matches = facts.filter(
+    (f) => f.domain === 'labs' && analyteKeys.includes(f.factKey),
+  );
+  if (matches.length === 0) return null;
+  matches.sort((a, b) => {
+    const aT = a.dateRelevant ? new Date(a.dateRelevant).getTime() : 0;
+    const bT = b.dateRelevant ? new Date(b.dateRelevant).getTime() : 0;
+    return bT - aT;
+  });
+  return matches[0];
+}
+
+function labDisplayValue(fact: CanonicalFact | null): string | null {
+  if (!fact) return null;
+  const v = (fact.value as Record<string, unknown>) ?? {};
+  const valueText = (v.valueText as string | null) ?? null;
+  const unit = (v.unit as string | null) ?? null;
+  return formatLabValue(valueText, unit) || valueText || null;
+}
+
+function computePreComputedAnswers(facts: CanonicalFact[]): PreComputedAnswers {
+  const out = emptyPreComputedAnswers();
+
+  // ── Medications ────────────────────────────────────────────────────────
+  const meds = facts.filter((f) => f.domain === 'medications' && f.status !== 'archived');
+  out.activeMedCount = meds.length;
+  out.activeMedNames = meds.map((m) => m.displayName).slice(0, 20);
+
+  // ── Latest A1c ─────────────────────────────────────────────────────────
+  const a1c = pickLatestLab(facts, ['a1c', 'hba1c', 'hemoglobin a1c']);
+  const a1cDisplay = labDisplayValue(a1c);
+  if (a1c && a1cDisplay) {
+    out.latestA1c = { value: a1cDisplay, date: a1c.dateRelevant };
+  }
+
+  // ── Latest BP (look in vitals or lab observations) ────────────────────
+  // BP isn't usually in result_lab_observations — but if it ever is, prefer
+  // separate systolic/diastolic readings from the same observation date.
+  const sys = pickLatestLab(facts, ['systolic', 'systolic bp', 'sbp']);
+  const dia = pickLatestLab(facts, ['diastolic', 'diastolic bp', 'dbp']);
+  if (sys && dia && sys.dateRelevant === dia.dateRelevant) {
+    const sysVal = labDisplayValue(sys);
+    const diaVal = labDisplayValue(dia);
+    if (sysVal && diaVal) {
+      out.latestBP = {
+        systolic: sysVal,
+        diastolic: diaVal,
+        date: sys.dateRelevant,
+      };
+    }
+  }
+
+  // ── Latest lipids (group by LDL/HDL/Total/Triglycerides) ──────────────
+  const ldl = pickLatestLab(facts, ['ldl', 'ldl cholesterol']);
+  const hdl = pickLatestLab(facts, ['hdl', 'hdl cholesterol']);
+  const total = pickLatestLab(facts, ['cholesterol', 'total cholesterol']);
+  const trig = pickLatestLab(facts, ['triglycerides']);
+  if (ldl || hdl || total || trig) {
+    const candidateDates = [ldl, hdl, total, trig]
+      .map((f) => f?.dateRelevant ?? null)
+      .filter((d): d is string => !!d)
+      .sort()
+      .reverse();
+    out.latestLipids = {
+      ldl: labDisplayValue(ldl),
+      hdl: labDisplayValue(hdl),
+      total: labDisplayValue(total),
+      triglycerides: labDisplayValue(trig),
+      date: candidateDates[0] ?? null,
+    };
+  }
+
+  // ── Appointments ──────────────────────────────────────────────────────
+  const appts = facts.filter((f) => f.domain === 'appointments');
+  const now = Date.now();
+  const upcoming = appts
+    .filter((a) => a.dateRelevant && new Date(a.dateRelevant).getTime() >= now)
+    .sort((a, b) => {
+      const aT = a.dateRelevant ? new Date(a.dateRelevant).getTime() : Infinity;
+      const bT = b.dateRelevant ? new Date(b.dateRelevant).getTime() : Infinity;
+      return aT - bT;
+    });
+  const past = appts
+    .filter((a) => a.dateRelevant && new Date(a.dateRelevant).getTime() < now)
+    .sort((a, b) => {
+      const aT = a.dateRelevant ? new Date(a.dateRelevant).getTime() : 0;
+      const bT = b.dateRelevant ? new Date(b.dateRelevant).getTime() : 0;
+      return bT - aT;
+    });
+  if (upcoming[0]) {
+    const v = (upcoming[0].value as Record<string, unknown>) ?? {};
+    out.nextAppointment = {
+      title: upcoming[0].displayName,
+      provider: (v.provider as string | null) ?? null,
+      date: upcoming[0].dateRelevant ?? '',
+      sourceId: upcoming[0].sourceId,
+    };
+  }
+  if (past[0]) {
+    const v = (past[0].value as Record<string, unknown>) ?? {};
+    out.lastAppointment = {
+      title: past[0].displayName,
+      provider: (v.provider as string | null) ?? null,
+      date: past[0].dateRelevant ?? '',
+      sourceId: past[0].sourceId,
+    };
+  }
+
+  // ── Allergies ─────────────────────────────────────────────────────────
+  const allergies = facts.filter((f) => f.domain === 'allergies' && f.status !== 'archived');
+  if (allergies.length === 0) {
+    out.allergySummary = 'No known allergies';
+  } else {
+    const names = allergies.map((a) => a.displayName);
+    out.allergySummary = names.length <= 3
+      ? names.join(', ')
+      : `${names.slice(0, 3).join(', ')}, +${names.length - 3} more`;
+  }
+
+  // ── Conditions ────────────────────────────────────────────────────────
+  const conditions = facts.filter(
+    (f) => f.domain === 'conditions' && f.factType === 'condition' && f.status !== 'archived',
+  );
+  if (conditions.length === 0) {
+    out.conditionSummary = 'None on file';
+  } else {
+    const names = conditions.map((c) => c.displayName);
+    out.conditionSummary = names.length <= 3
+      ? names.join(', ')
+      : `${names.slice(0, 3).join(', ')}, +${names.length - 3} more`;
+  }
+
+  // ── Insurance ─────────────────────────────────────────────────────────
+  const insurance = facts.filter((f) => f.domain === 'insurance' && f.status !== 'archived');
+  if (insurance[0]) {
+    const v = (insurance[0].value as Record<string, unknown>) ?? {};
+    const memberId = (v.member_id as string | null) ?? null;
+    out.insuranceSummary = memberId
+      ? `${insurance[0].displayName}, Member ${memberId}`
+      : insurance[0].displayName;
+  }
+
+  // ── Preventive ────────────────────────────────────────────────────────
+  for (const p of facts.filter((f) => f.domain === 'preventive')) {
+    const v = (p.value as Record<string, unknown>) ?? {};
+    const status = (v.status as string | null) ?? null;
+    if (status === 'due' || status === 'overdue') out.preventiveDueCount += 1;
+    else if (status === 'due_soon') out.preventiveDueSoonCount += 1;
+  }
+
+  // ── Primary care provider (first care_team entry tagged primary care) ─
+  const careTeam = facts.filter((f) => f.domain === 'care_team' && f.status !== 'archived');
+  for (const c of careTeam) {
+    const v = (c.value as Record<string, unknown>) ?? {};
+    const specialty = ((v.specialty as string | null) ?? '').toLowerCase();
+    if (specialty.includes('primary') || specialty === 'pcp' || specialty.includes('family')) {
+      out.primaryCareProvider = c.displayName;
+      break;
+    }
+  }
+  if (!out.primaryCareProvider && careTeam[0]) {
+    out.primaryCareProvider = careTeam[0].displayName;
+  }
+
+  // ── Primary pharmacy (first medication's pharmacy_name) ───────────────
+  for (const m of meds) {
+    const v = (m.value as Record<string, unknown>) ?? {};
+    const pharmacy = (v.pharmacyName as string | null) ?? null;
+    if (pharmacy) {
+      out.primaryPharmacy = pharmacy;
+      break;
+    }
+  }
+
+  // ── Totals ────────────────────────────────────────────────────────────
+  out.totalProfileFacts = facts.length;
+
+  // ── Billing ───────────────────────────────────────────────────────────
+  const bills = facts.filter((f) => f.domain === 'billing' && f.status !== 'archived');
+  out.openBillCount = bills.length;
+  let owed = 0;
+  let owedSeen = false;
+  for (const b of bills) {
+    const v = (b.value as Record<string, unknown>) ?? {};
+    const patient = v.patientResponsibility as number | null;
+    if (typeof patient === 'number' && !Number.isNaN(patient)) {
+      owed += patient;
+      owedSeen = true;
+    }
+  }
+  if (owedSeen) out.totalOwed = owed;
+
+  return out;
 }

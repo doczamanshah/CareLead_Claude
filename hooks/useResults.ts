@@ -28,6 +28,7 @@ import type {
   DocumentSource,
   ResultType,
 } from '@/lib/types/results';
+import { invalidateAskByDomain } from '@/services/askInvalidation';
 
 export function useResults(profileId: string | null) {
   return useQuery({
@@ -68,6 +69,7 @@ export function useCreateResult() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['results', 'list', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'results');
     },
   });
 }
@@ -92,6 +94,7 @@ export function useUpdateResult() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['results', 'list', data.profile_id] });
       queryClient.invalidateQueries({ queryKey: ['results', 'detail', data.id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'results');
     },
   });
 }
@@ -109,6 +112,7 @@ export function useDeleteResult() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['results', 'list', data.profileId] });
+      invalidateAskByDomain(queryClient, data.profileId, 'results');
     },
   });
 }
@@ -197,6 +201,7 @@ export function useUploadResultDocument() {
       queryClient.invalidateQueries({ queryKey: ['results', 'documents', data.result_id] });
       queryClient.invalidateQueries({ queryKey: ['results', 'detail', data.result_id] });
       queryClient.invalidateQueries({ queryKey: ['results', 'list', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'results');
     },
   });
 }
@@ -259,6 +264,7 @@ export function useTriggerExtraction() {
       queryClient.invalidateQueries({ queryKey: ['results', 'detail', data.resultId] });
       queryClient.invalidateQueries({ queryKey: ['results', 'list', data.profileId] });
       queryClient.invalidateQueries({ queryKey: ['results', 'labObservations', data.resultId] });
+      invalidateAskByDomain(queryClient, data.profileId, 'labs');
     },
   });
 }
@@ -297,6 +303,7 @@ export function useSaveCorrections() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['results', 'detail', data.id] });
       queryClient.invalidateQueries({ queryKey: ['results', 'list', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'labs');
     },
   });
 }
@@ -351,6 +358,7 @@ export function useConfirmResult() {
       queryClient.invalidateQueries({
         queryKey: ['results', 'labObservations', data.id],
       });
+      invalidateAskByDomain(queryClient, data.profile_id, 'labs');
     },
   });
 }

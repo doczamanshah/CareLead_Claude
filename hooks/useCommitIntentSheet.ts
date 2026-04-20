@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { commitIntentSheet, updateIntentItemStatus } from '@/services/commit';
 import type { CommitSummary } from '@/services/commit';
+import { invalidateAskForProfile } from '@/services/askInvalidation';
 
 /**
  * Mutation to commit all accepted/edited intent items for an intent sheet.
@@ -20,12 +21,15 @@ export function useCommitIntentSheet() {
       if (!result.success) throw new Error(result.error);
       return result.data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['intentSheets'] });
       queryClient.invalidateQueries({ queryKey: ['artifacts'] });
       queryClient.invalidateQueries({ queryKey: ['profiles'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['profileGaps'] });
+      // Commit can touch any domain — drop the entire response cache and
+      // refetch the profile index for the affected profile.
+      invalidateAskForProfile(queryClient, data?.profileId ?? null);
     },
   });
 }

@@ -23,6 +23,7 @@ import {
 } from '@/services/preventive';
 import { fetchPreventiveBriefingItems } from '@/services/preventiveBriefing';
 import { useAuth } from '@/hooks/useAuth';
+import { invalidateAskByDomain } from '@/services/askInvalidation';
 import type {
   PreventiveItem,
   PreventiveLastDoneSource,
@@ -96,6 +97,7 @@ export function useRunScan() {
       // fetches — invalidate them so the dashboard reflects post-scan archival.
       queryClient.invalidateQueries({ queryKey: ['preventive', 'metrics', data.profileId] });
       queryClient.invalidateQueries({ queryKey: ['preventive', 'wellnessBundle', data.profileId] });
+      invalidateAskByDomain(queryClient, data.profileId, 'preventive');
     },
   });
 }
@@ -122,6 +124,7 @@ export function useUpdatePreventiveItem() {
       queryClient.invalidateQueries({ queryKey: ['preventive', 'item', data.id] });
       queryClient.invalidateQueries({ queryKey: ['preventive', 'itemEvents', data.id] });
       queryClient.invalidateQueries({ queryKey: ['preventive', 'briefing', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'preventive');
     },
   });
 }
@@ -137,6 +140,7 @@ function invalidatePreventiveCaches(
   queryClient.invalidateQueries({ queryKey: ['preventive', 'briefing', profileId] });
   queryClient.invalidateQueries({ queryKey: ['preventive', 'metrics', profileId] });
   queryClient.invalidateQueries({ queryKey: ['preventive', 'wellnessBundle', profileId] });
+  invalidateAskByDomain(queryClient, profileId, 'preventive');
 }
 
 export function useUpdateLastDoneDate() {
@@ -444,6 +448,7 @@ export function useCommitIntentSheet() {
       queryClient.invalidateQueries({ queryKey: ['preventive', 'intentSheet', sheetId] });
       queryClient.invalidateQueries({ queryKey: ['preventive', 'briefing', profileId] });
       queryClient.invalidateQueries({ queryKey: ['tasks', 'list', profileId] });
+      invalidateAskByDomain(queryClient, profileId, 'preventive');
     },
   });
 }

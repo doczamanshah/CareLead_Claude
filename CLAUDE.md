@@ -1317,9 +1317,137 @@ Pure UI/UX refactor of the billing module — services, hooks, and data layer un
 - Failed: "We couldn't read this clearly. You can try a better photo or add details manually."
 - Context-aware next-step hint: "Upload your bill or EOB", "Upload your EOB to check for errors", "Upload the matching bill"
 
+**Freeform appointment creation (added during Item 3):**
+- Dictation-first entry with AI extraction (Edge Function: `extract-appointment`)
+- Structured review form with enhanced context fields: `reason`, `companion`, `transportation`, `special_needs`
+- Smart prep generation from extracted context
+- Screens: `app/(main)/appointments/freeform.tsx`, `app/(main)/appointments/review.tsx`
+
+**Key files for Item 3:** `services/billingStage.ts`, `components/modules/SimpleBillCard.tsx`, `app/(main)/appointments/freeform.tsx`, `app/(main)/appointments/review.tsx`
+
+#### Item 4: Tasks & Reminders Refinement — COMPLETE
+
+**Part 1 — Smart organization & priorities:**
+- Task tiering: Today / This Week / When You're Ready buckets based on urgency + due date
+- Bundling by source (one card per source artifact, expandable into individual tasks)
+- Context enrichment (call scripts, contact info, reference numbers attached at creation time)
+- "What Matters to You" priority layer — Edge Function `extract-priorities` parses patient free-text into structured priorities; `patient_priorities` table stores them; tasks scored against priorities for personalized ordering
+
+**Part 2 — Lifecycle & fatigue controls:**
+- Auto-expiry rules per task type (e.g., refill reminders expire after fill-date passes + grace window)
+- Smart snooze with contextual options (until next appointment, until refill due, "remind me tomorrow", custom)
+- Fatigue controls: per-user volume control (max active tasks), dismissal dampening (suppress similar tasks for N days after dismissal)
+- Enhanced daily briefing card (`DailyBriefingCard`) — single-glance summary of what matters today
+- Completion celebrations: progress tracking, streaks, milestone confetti
+
+**Part 4c — Living priorities:**
+- Priorities are always-accessible (no one-time onboarding capture)
+- Incremental updates with quick-add chips
+- Priority badges visible on boosted tasks throughout the app
+- Merge logic prevents duplicate or near-duplicate priorities
+
+**Key files for Item 4:**
+- Services: `services/taskBundling.ts`, `services/taskPrioritization.ts`, `services/taskLifecycle.ts`, `services/taskSnooze.ts`, `services/taskVolumeControl.ts`, `services/taskProgress.ts`, `services/dailyBriefing.ts`, `services/patientPriorities.ts`
+- State: `stores/wellnessVisitStore.ts`
+- Components: `components/SmartSnoozeSheet.tsx`, `components/DailyBriefingCard.tsx`
+- Screens: `app/(main)/profile/[profileId]/priorities.tsx`
+
+#### Item 5: Preventive Care Expansion — COMPLETE
+
+**Part 1 — Expanded rule engine:**
+- Multiple screening methods per rule with independent cadences (e.g., colonoscopy every 10y vs. FIT every 1y)
+- Condition-based triggers (rules can fire only when relevant conditions are present)
+- HEDIS measure codes attached to rules for quality reporting alignment
+- Seasonal windows (e.g., flu shot recommended Sep–Mar)
+- 25 rules total (up from 10)
+- New utility: `lib/utils/conditionMatcher.ts` for evaluating condition triggers
+- Screening method selection UI on item detail
+
+**Part 2 — Notifications, outcomes, reporting:**
+- Smart notification strategy with three modes: Active / Visit-only / Quiet
+- Appointment-anchored reminders with "Discuss at my next visit" action
+- 30-day cooldown between notifications for the same item
+- Measurable outcomes: gap closure metrics, compliance rate, HEDIS compliance
+- Shareable Preventive Care Summary report
+- Wellness visit bundle for one-shot preparation
+
+**Part 5c — Dashboard overhaul:**
+- Categorized collapsible sections: Cancer / Immunizations / Diabetes / Cardiovascular / Behavioral / Wellness
+- Eligibility engine fix — properly skips items outside age/sex/condition range instead of surfacing them as "Needs Review"
+- Progressive reveal demographics prompt (asks for missing facts only when needed to evaluate a relevant rule)
+- New `archived` status for items that become ineligible (e.g., post-surgery, age-out)
+
+**Part 5d — Annual Wellness Visit dedicated flow:**
+- 5-step wizard: freeform dictation → profile review → preventive agenda → questions → shareable visit packet
+- Edge Function: `extract-wellness-input` (parses freeform wellness-visit input into structured agenda)
+- Wellness visit store with persistence across app sessions
+- Access points: preventive dashboard, home screen, appointment detail
+- Sex field normalization fix in `lib/utils/gender.ts` (consistent handling of "M"/"F"/"male"/"female"/null across rule evaluation)
+
+**Key files for Item 5:**
+- Services: `services/preventiveEngine.ts`, `services/preventiveReminders.ts`, `services/preventiveBriefingStrategy.ts`, `services/preventiveMetrics.ts`, `services/preventiveReport.ts`, `services/wellnessVisitBundle.ts`, `services/wellnessVisit.ts`
+- Utils: `lib/utils/conditionMatcher.ts`, `lib/utils/gender.ts`
+- Screens: `app/(main)/preventive/wellness-visit/` (5-step wizard screens)
+
+#### New Edge Functions added in Items 3–5
+- `extract-appointment` — freeform appointment extraction (Item 3)
+- `extract-priorities` — patient priorities extraction (Item 4)
+- `extract-wellness-input` — wellness visit freeform extraction (Item 5)
+
+#### Item 6: Retrieval Efficiency — COMPLETE
+
+Caching, performance, and cost optimization for the Ask CareLead retrieval system. Pure performance work — no behavior changes from the user's perspective.
+
+**Profile Index caching:**
+- TanStack Query options on `useProfileIndex`: `staleTime: 5 min`, `gcTime: 10 min`, `refetchOnWindowFocus: false`, `refetchOnMount: false`
+- New `prefetchProfileIndex(queryClient, profileId, householdId)` and `usePrefetchProfileIndex` hooks
+- Home screen warms the index speculatively on mount so the first Ask query feels instant
+- Index build also logs `[Ask] indexBuild` timing in `__DEV__`
+
+**Response cache (`services/askCache.ts`):**
+- In-memory singleton `askCache` (LRU, max 50 entries)
+- Query normalization: lowercase, punctuation stripping, prefix stripping ("please tell me", "show me", "what is my"), synonym collapsing (medications → meds, providers → doctors, vaccines → immunizations)
+- Per-source TTL: deterministic answers 5 min, AI fallback answers 60 min (cost amortization)
+- Methods: `get`, `set`, `invalidate`, `invalidateByDomain` (clears entries whose normalized query mentions a domain keyword)
+- Cache hits annotate the response with `cached: true` and the original `source`
+
+**Centralized cache invalidation (`services/askInvalidation.ts`):**
+- Single helper module: `invalidateAskForProfile` (full clear) and `invalidateAskByDomain` (targeted)
+- Both clear the response cache AND invalidate the profile index TanStack Query
+- Wired into mutation `onSuccess` for: meds (CRUD + sig/supply/status), results (CRUD + extraction + confirm), appointments (CRUD + reschedule), preventive (full lifecycle via `invalidatePreventiveCaches`), billing (CRUD), profile facts (add/delete + demographics update), closeout finalization, commit intent sheet, verify fact, resolve conflict
+- `CommitSummary` extended with `profileId` so the commit hook can target the right profile
+
+**Pre-computed common answers (`services/profileIndex.ts` + `lib/types/ask.ts`):**
+- `PreComputedAnswers` interface attached to `ProfileIndex`
+- Computed during the same walk that builds CanonicalFacts — zero additional DB queries
+- Fields: `activeMedCount`, `activeMedNames`, `latestA1c`, `latestBP`, `latestLipids`, `nextAppointment`, `lastAppointment`, `allergySummary`, `conditionSummary`, `insuranceSummary`, `preventiveDueCount`, `preventiveDueSoonCount`, `primaryCareProvider`, `primaryPharmacy`, `totalOwed`, `openBillCount`, `totalProfileFacts`
+- Engine fast path: `executeListAll` for medications now reads name list and count from the snapshot instead of re-iterating; `executeCompute` returns directly from the snapshot
+
+**Expanded deterministic intent coverage:**
+- New `compute` query type for derived answers (no underlying single-fact)
+- New entity domain `specialty_name`; new attributes for the new med/lab/profile intents
+- 12 new intents:
+  - Medications: `GET_MED_FREQUENCY`, `GET_MED_PHARMACY`, `GET_MED_DURATION`, `IS_TAKING_MED`
+  - Labs: `IS_LAB_NORMAL`
+  - Care team: `GET_PRIMARY_CARE`, `GET_PHARMACY_INFO`
+  - Billing: `GET_TOTAL_OWED`
+  - Preventive: `IS_UP_TO_DATE`
+  - Profile: `GET_DOB`, `GET_AGE`, `GET_BLOOD_TYPE`
+- Router now strips verbal opener prefixes before keyword matching ("please show me…", "tell me about…")
+- Gap actions extended so all new med-entity and lab-entity intents share the existing add-medication / add-lab CTAs
+
+**Performance timing:**
+- `__DEV__`-only console logs in `services/askOrchestrator.ts`
+- Per-query line: `[Ask] "<query>" | src=<source> | cached=<bool> | total=<ms> | route=<ms> | engine=<ms> | fallback=<ms>`
+- Index build line: `[Ask] indexBuild profileId=… facts=… time=…ms`
+- No production cost, no DB writes
+
+**Key files for Item 6:** `services/askCache.ts`, `services/askInvalidation.ts`, `services/askOrchestrator.ts`, `services/askIntents.ts`, `services/askEngine.ts`, `services/askRouter.ts`, `services/profileIndex.ts`, `services/askGapActions.ts`, `services/commit.ts`, `lib/types/ask.ts`, `hooks/useAsk.ts`
+
 #### Phase 3: Remaining Items
-- [ ] Item 4: Tasks & reminders refinement
-- [ ] Item 5: Preventive Care expansion
-- [ ] Item 6: Retrieval efficiency
+- [x] Item 3: Bills & EOBs simplification — COMPLETE
+- [x] Item 4: Tasks & reminders refinement — COMPLETE
+- [x] Item 5: Preventive Care expansion — COMPLETE
+- [x] Item 6: Retrieval efficiency — COMPLETE
 - [ ] Item 7: HIPAA alignment review
 - [ ] Item 8: App Store preparation

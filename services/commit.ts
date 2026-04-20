@@ -23,6 +23,8 @@ export interface CommitSummary {
   factsCreated: number;
   tasksCreated: number;
   intentSheetId: string;
+  /** Profile that received the committed data — needed for cache invalidation downstream. */
+  profileId: string;
   createdTaskIds: string[];
   /** Fields committed, for the Smart Follow-Up card */
   committedItems: CommittedItemInfo[];
@@ -724,6 +726,7 @@ export async function commitIntentSheet(
       factsCreated,
       tasksCreated,
       intentSheetId,
+      profileId: typedSheet.profile_id,
       createdTaskIds,
       committedItems,
       detectedGaps,

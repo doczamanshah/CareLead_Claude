@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
+import { usePrefetchProfileIndex } from '@/hooks/useAsk';
 import { useAuth } from '@/hooks/useAuth';
 import { useTasks } from '@/hooks/useTasks';
 import { useAppointments } from '@/hooks/useAppointments';
@@ -141,6 +142,11 @@ export default function HomeScreen() {
   const { user } = useAuth();
   const router = useRouter();
   const queryClient = useQueryClient();
+
+  // Pre-build the Ask profile index in the background. The user is more
+  // likely to open Ask from Home than from anywhere else; warming the cache
+  // here makes the first question feel instant. No-op if already cached.
+  usePrefetchProfileIndex(activeProfileId, activeProfile?.household_id ?? null);
 
   // Data fetching
   const { data: medications } = useMedications(activeProfileId);

@@ -20,6 +20,7 @@ import type {
   AdherenceEventType,
   MedicationStatus,
 } from '@/lib/types/medications';
+import { invalidateAskByDomain } from '@/services/askInvalidation';
 
 export function useMedications(profileId: string | null) {
   return useQuery({
@@ -88,6 +89,7 @@ export function useCreateMedication() {
       queryClient.invalidateQueries({ queryKey: ['medications', 'list', data.profile_id] });
       queryClient.invalidateQueries({ queryKey: ['medications', 'today', data.profile_id] });
       queryClient.invalidateQueries({ queryKey: ['medications', 'refills', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'medications');
     },
   });
 }
@@ -106,6 +108,7 @@ export function useUpdateMedication() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['medications', 'list', data.profile_id] });
       queryClient.invalidateQueries({ queryKey: ['medications', 'detail', data.id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'medications');
     },
   });
 }
@@ -125,6 +128,7 @@ export function useUpdateMedicationStatus() {
       queryClient.invalidateQueries({ queryKey: ['medications', 'list', data.profile_id] });
       queryClient.invalidateQueries({ queryKey: ['medications', 'detail', data.id] });
       queryClient.invalidateQueries({ queryKey: ['medications', 'today', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'medications');
     },
   });
 }
@@ -144,6 +148,7 @@ export function useUpdateSupply() {
       queryClient.invalidateQueries({ queryKey: ['medications', 'list', data.profile_id] });
       queryClient.invalidateQueries({ queryKey: ['medications', 'detail', data.medication_id] });
       queryClient.invalidateQueries({ queryKey: ['medications', 'refills', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'medications');
     },
   });
 }
@@ -162,6 +167,7 @@ export function useUpdateSig() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['medications', 'list', data.profile_id] });
       queryClient.invalidateQueries({ queryKey: ['medications', 'detail', data.medication_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'medications');
     },
   });
 }

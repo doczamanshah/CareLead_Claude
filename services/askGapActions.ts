@@ -53,6 +53,10 @@ export function gapActionForIntent(
 
     case 'GET_MED_DOSE':
     case 'GET_MED_PRESCRIBER':
+    case 'GET_MED_FREQUENCY':
+    case 'GET_MED_PHARMACY':
+    case 'GET_MED_DURATION':
+    case 'IS_TAKING_MED':
       // Partial match: user named a specific medication that's not on file.
       // Prefill the name so they don't have to retype.
       return {
@@ -66,6 +70,7 @@ export function gapActionForIntent(
 
     case 'GET_LATEST_LAB':
     case 'GET_LAB_HISTORY':
+    case 'IS_LAB_NORMAL':
       return {
         message: entityLabel
           ? `No ${entityLabel.toUpperCase()} results found.`

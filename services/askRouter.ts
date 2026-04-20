@@ -36,12 +36,50 @@ export interface RoutedQuery {
   matchedPattern: string | null;
 }
 
+/**
+ * Verbal openers that don't change which intent the question maps to.
+ * Strip them before keyword matching so "please tell me what meds I take"
+ * matches the same patterns as "what meds I take".
+ *
+ * Keep this list focused on phrases the router gains by ignoring — leave
+ * meaningful words ("when", "where", "who") alone.
+ */
+const STRIP_PREFIXES = [
+  'can you tell me',
+  'can you show me',
+  'tell me about',
+  'show me my',
+  'show me the',
+  'show me',
+  'tell me',
+  'i want to know',
+  'i d like to know',
+  'i would like to know',
+  'please show',
+  'please tell',
+  'please',
+];
+
 function normalizeQuery(query: string): string {
-  return query
+  let q = query
     .toLowerCase()
     .replace(/[?!.,;:"']+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const prefix of STRIP_PREFIXES) {
+      if (q.startsWith(prefix + ' ')) {
+        q = q.slice(prefix.length + 1).trim();
+        changed = true;
+        break;
+      }
+    }
+  }
+
+  return q;
 }
 
 interface IntentMatch {

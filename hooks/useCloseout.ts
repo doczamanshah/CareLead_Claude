@@ -17,6 +17,7 @@ import {
   type UpdateCloseoutParams,
 } from '@/services/closeout';
 import type { OutcomeStatus } from '@/lib/types/appointments';
+import { invalidateAskForProfile } from '@/services/askInvalidation';
 
 export function useCloseoutForAppointment(appointmentId: string | null) {
   return useQuery({
@@ -202,6 +203,9 @@ export function useFinalizeCloseout() {
       });
       queryClient.invalidateQueries({ queryKey: ['tasks', 'list'] });
       queryClient.invalidateQueries({ queryKey: ['profile', 'detail', data.appointment.profile_id] });
+      // Closeout finalization writes profile facts and tasks across multiple
+      // domains — drop the entire response cache.
+      invalidateAskForProfile(queryClient, data.appointment.profile_id);
     },
   });
 }

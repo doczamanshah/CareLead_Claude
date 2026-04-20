@@ -10,6 +10,7 @@ import {
 import { runAndPersistScan } from '@/services/preventive';
 import { useProfileStore } from '@/stores/profileStore';
 import type { ProfileFact } from '@/lib/types/profile';
+import { invalidateAskForProfile } from '@/services/askInvalidation';
 
 export function useProfileDetail(profileId: string | null) {
   return useQuery({
@@ -42,6 +43,7 @@ export function useUpdateProfile(profileId: string) {
     onSuccess: async ({ profile, changed }) => {
       queryClient.invalidateQueries({ queryKey: ['profile', 'detail', profileId] });
       queryClient.invalidateQueries({ queryKey: ['profiles', 'list', user?.id] });
+      invalidateAskForProfile(queryClient, profileId);
 
       // Refresh the Zustand profile store so activeProfile picks up the
       // new demographics immediately (gender/DOB drive preventive eligibility).
@@ -85,6 +87,7 @@ export function useAddProfileFact(profileId: string) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['profile', 'detail', profileId] });
+      invalidateAskForProfile(queryClient, profileId);
     },
   });
 }
@@ -100,6 +103,7 @@ export function useDeleteProfileFact(profileId: string) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['profile', 'detail', profileId] });
+      invalidateAskForProfile(queryClient, profileId);
     },
   });
 }

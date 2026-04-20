@@ -60,6 +60,7 @@ import type {
   AppealPacketStatus,
   AppealChecklist,
 } from '@/lib/types/billing';
+import { invalidateAskByDomain } from '@/services/askInvalidation';
 
 export function useBillingCases(profileId: string | null) {
   return useQuery({
@@ -113,6 +114,7 @@ export function useCreateBillingCase() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['billing', 'cases', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'billing');
     },
   });
 }
@@ -133,6 +135,7 @@ export function useUpdateBillingCase() {
       queryClient.invalidateQueries({ queryKey: ['billing', 'case', data.id] });
       queryClient.invalidateQueries({ queryKey: ['billing', 'timeline', data.id] });
       queryClient.invalidateQueries({ queryKey: ['billing', 'briefing', data.profile_id] });
+      invalidateAskByDomain(queryClient, data.profile_id, 'billing');
       queryClient.invalidateQueries({ queryKey: ['billing', 'activeCriticalCount', data.profile_id] });
     },
   });
@@ -151,6 +154,7 @@ export function useDeleteBillingCase() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['billing', 'cases', data.profileId] });
+      invalidateAskByDomain(queryClient, data.profileId, 'billing');
     },
   });
 }

@@ -77,12 +77,58 @@ export interface CanonicalFact {
   conflictGroupId: string | null;
 }
 
+/**
+ * Pre-computed snapshots for the most common Ask queries. Filled during
+ * `buildProfileIndex` from the same rows that produce CanonicalFacts, so
+ * lookup is free at query time and doesn't re-walk the index.
+ *
+ * Always treat these as a fast path — engine code MUST still be able to
+ * answer the same question from `facts` if a field is null (e.g., user has
+ * no labs yet).
+ */
+export interface PreComputedAnswers {
+  activeMedCount: number;
+  activeMedNames: string[];
+  latestA1c: { value: string; date: string | null } | null;
+  latestBP: { systolic: string; diastolic: string; date: string | null } | null;
+  latestLipids: {
+    ldl: string | null;
+    hdl: string | null;
+    total: string | null;
+    triglycerides: string | null;
+    date: string | null;
+  } | null;
+  nextAppointment: {
+    title: string;
+    provider: string | null;
+    date: string;
+    sourceId: string | null;
+  } | null;
+  lastAppointment: {
+    title: string;
+    provider: string | null;
+    date: string;
+    sourceId: string | null;
+  } | null;
+  allergySummary: string;
+  conditionSummary: string;
+  insuranceSummary: string;
+  preventiveDueCount: number;
+  preventiveDueSoonCount: number;
+  primaryCareProvider: string | null;
+  primaryPharmacy: string | null;
+  totalProfileFacts: number;
+  totalOwed: number | null;
+  openBillCount: number;
+}
+
 export interface ProfileIndex {
   profileId: string;
   profileName: string;
   facts: CanonicalFact[];
   lastBuilt: string;
   factCounts: Record<FactDomain, number>;
+  preComputedAnswers: PreComputedAnswers;
 }
 
 // ── Answer surface (used by the retrieval engine in Step 2) ────────────────
@@ -269,6 +315,10 @@ export interface AskResponse {
   suggestedFollowUps: string[];
   noResults: boolean;
   gapAction: GapAction | null;
+  /** True when this response came from the in-memory response cache. Dev/debug only. */
+  cached?: boolean;
+  /** Source path: 'deterministic' for engine answers, 'ai_fallback' for Edge Function. */
+  source?: 'deterministic' | 'ai_fallback';
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -297,4 +347,26 @@ export function emptyFactCounts(): Record<FactDomain, number> {
     },
     {} as Record<FactDomain, number>,
   );
+}
+
+export function emptyPreComputedAnswers(): PreComputedAnswers {
+  return {
+    activeMedCount: 0,
+    activeMedNames: [],
+    latestA1c: null,
+    latestBP: null,
+    latestLipids: null,
+    nextAppointment: null,
+    lastAppointment: null,
+    allergySummary: 'No known allergies',
+    conditionSummary: 'None on file',
+    insuranceSummary: 'Not on file',
+    preventiveDueCount: 0,
+    preventiveDueSoonCount: 0,
+    primaryCareProvider: null,
+    primaryPharmacy: null,
+    totalProfileFacts: 0,
+    totalOwed: null,
+    openBillCount: 0,
+  };
 }

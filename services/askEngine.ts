@@ -206,6 +206,25 @@ function formatDateShort(iso: string | null): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+function monthsSince(iso: string | null): number | null {
+  if (!iso) return null;
+  const start = new Date(iso);
+  if (Number.isNaN(start.getTime())) return null;
+  const now = new Date();
+  const months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
+  return months >= 0 ? months : null;
+}
+
+function formatDurationMonths(months: number): string {
+  if (months < 1) return 'less than a month';
+  if (months === 1) return '1 month';
+  if (months < 12) return `${months} months`;
+  const years = Math.floor(months / 12);
+  const rem = months % 12;
+  if (rem === 0) return years === 1 ? '1 year' : `${years} years`;
+  return `${years} year${years === 1 ? '' : 's'}, ${rem} month${rem === 1 ? '' : 's'}`;
+}
+
 function factsByDomain(index: ProfileIndex, domain: FactDomain): CanonicalFact[] {
   return index.facts.filter((f) => f.domain === domain);
 }
@@ -1028,19 +1047,23 @@ function executeListAll(
     facts = facts.filter((f) => f.factType === 'imaging_result');
   }
 
-  // Medications → single SummaryListCard (always, even for 1 item)
+  // Medications → single SummaryListCard (always, even for 1 item).
+  // Fast path: shortAnswer comes straight from preComputedAnswers so the
+  // first sentence renders without iterating the index again.
   if (intent.domain === 'medications' && facts.length > 0) {
     const sorted = sortForListAll(facts);
     const summary = buildMedicationSummary(sorted);
-    const names = sorted.slice(0, 3).map((f) => f.displayName);
+    const pre = index.preComputedAnswers;
+    const names = pre.activeMedNames.length > 0
+      ? pre.activeMedNames.slice(0, 3)
+      : sorted.slice(0, 3).map((f) => f.displayName);
+    const total = pre.activeMedCount > 0 ? pre.activeMedCount : sorted.length;
     const nameList =
-      sorted.length <= 3
-        ? names.join(', ')
-        : `${names.join(', ')}, and ${sorted.length - 3} more`;
+      total <= 3 ? names.join(', ') : `${names.join(', ')}, and ${total - 3} more`;
     const shortAnswer =
-      sorted.length === 1
-        ? `You're currently taking ${sorted[0].displayName}.`
-        : `You're currently taking ${sorted.length} medications: ${nameList}.`;
+      total === 1
+        ? `You're currently taking ${names[0]}.`
+        : `You're currently taking ${total} medications: ${nameList}.`;
     return {
       ...blankResponse(routed.originalQuery, shortAnswer),
       summaryLists: [summary],
@@ -1433,6 +1456,28 @@ function executeGetSpecific(
     shortAnswer = combined
       ? `${fact.displayName}: ${combined}.`
       : `I don't have a dose on file for ${fact.displayName}.`;
+  } else if (intent.attribute === 'frequency' && value) {
+    const frequency = (value.frequency as string | null) ?? null;
+    const instructions = (value.instructions as string | null) ?? null;
+    const detail = frequency ?? instructions;
+    shortAnswer = detail
+      ? `Take ${fact.displayName} ${detail}.`
+      : `I don't have a schedule on file for ${fact.displayName}.`;
+  } else if (intent.attribute === 'duration' && value) {
+    const start = (value.lastFillDate as string | null) ?? null;
+    if (start) {
+      const months = monthsSince(start);
+      shortAnswer = months != null
+        ? `You've been on ${fact.displayName} for about ${formatDurationMonths(months)} (since ${formatDate(start)}).`
+        : `${fact.displayName} was last filled on ${formatDate(start)}.`;
+    } else {
+      shortAnswer = `I don't have a start date on file for ${fact.displayName}.`;
+    }
+  } else if (intent.attribute === 'is_taking' && value) {
+    const status = (value.status as string | null) ?? 'active';
+    shortAnswer = status === 'active'
+      ? `Yes — ${fact.displayName} is on your active medication list.`
+      : `${fact.displayName} is on file with status: ${status}.`;
   } else if (intent.attribute === 'prescriber' && value) {
     const prescriber = (value.prescriberName as string | null) ?? null;
     shortAnswer = prescriber
@@ -1443,6 +1488,18 @@ function executeGetSpecific(
     shortAnswer = pharmacy
       ? `${fact.displayName} is filled at ${pharmacy}.`
       : `I don't have a pharmacy on file for ${fact.displayName}.`;
+  } else if (intent.attribute === 'is_normal' && value) {
+    const flag = ((value.flag as string | null) ?? '').toLowerCase();
+    const labValue = (value.valueText as string | null) ?? null;
+    const unit = (value.unit as string | null) ?? null;
+    const display = formatLabValue(labValue, unit) || labValue || 'unknown';
+    if (!flag || flag === 'normal' || flag === 'in_range' || flag === 'n') {
+      shortAnswer = `Your latest ${fact.displayName} (${display}) is in normal range.`;
+    } else if (flag === 'critical' || flag === 'crit') {
+      shortAnswer = `Your latest ${fact.displayName} (${display}) is flagged critical. Worth reviewing with your provider.`;
+    } else {
+      shortAnswer = `Your latest ${fact.displayName} (${display}) is flagged ${flag}.`;
+    }
   }
 
   return {
@@ -1595,6 +1652,175 @@ function executeGetCount(
   };
 }
 
+// ── Compute (derived answers from preComputedAnswers) ──────────────────────
+//
+// The 'compute' query type returns a derived answer assembled from the
+// pre-computed snapshot in the index. These intents bypass the normal
+// list_all/get_specific paths because the answer isn't a single fact —
+// it's a calculation (age, total owed, "are you up to date", etc.).
+
+function executeCompute(
+  routed: RoutedQuery,
+  index: ProfileIndex,
+  intent: AskIntent,
+): AskResponse {
+  const pre = index.preComputedAnswers;
+
+  switch (intent.attribute) {
+    case 'date_of_birth': {
+      // DOB lives on the profile row, not in the index — surface a friendly
+      // message that points the user to their profile screen.
+      return {
+        ...blankResponse(
+          routed.originalQuery,
+          'Your date of birth is in your profile under personal info.',
+        ),
+        suggestedFollowUps: ['How old am I?', 'What is my blood type?'],
+      };
+    }
+
+    case 'age': {
+      // Age requires DOB; compute when available. The profile demographic
+      // facts are in the index under a synthetic profile fact when present —
+      // best effort otherwise.
+      const dobFact = index.facts.find(
+        (f) => f.factType === 'demographic' && f.factKey === 'date_of_birth',
+      );
+      const dob = dobFact ? ((dobFact.value as Record<string, unknown>)?.value as string | null) : null;
+      if (!dob) {
+        return emptyResponse(
+          routed.originalQuery,
+          "I don't have a date of birth on your profile yet.",
+          ['What medications am I taking?'],
+        );
+      }
+      const age = computeAge(dob);
+      return {
+        ...blankResponse(
+          routed.originalQuery,
+          age != null ? `You are ${age} years old.` : "I couldn't calculate your age from the date on file.",
+        ),
+        suggestedFollowUps: ['What screenings am I due for?', 'When is my next appointment?'],
+      };
+    }
+
+    case 'blood_type': {
+      const bt = index.facts.find(
+        (f) => f.factType === 'demographic' && f.factKey === 'blood_type',
+      );
+      const value = bt ? ((bt.value as Record<string, unknown>)?.value as string | null) : null;
+      if (!value) {
+        return emptyResponse(
+          routed.originalQuery,
+          "I don't have a blood type on file.",
+          ['What are my allergies?', 'What conditions do I have?'],
+        );
+      }
+      return {
+        ...blankResponse(routed.originalQuery, `Your blood type is ${value}.`),
+        suggestedFollowUps: ['What are my allergies?'],
+      };
+    }
+
+    case 'primary_care': {
+      if (!pre.primaryCareProvider) {
+        return emptyResponseForIntent(
+          routed.originalQuery,
+          "You don't have a primary care provider on file yet.",
+          intent,
+          index,
+        );
+      }
+      return {
+        ...blankResponse(
+          routed.originalQuery,
+          `Your primary care provider is ${pre.primaryCareProvider}.`,
+        ),
+        suggestedFollowUps: ['When was my last appointment?', 'Who is on my care team?'],
+      };
+    }
+
+    case 'pharmacy_name': {
+      if (!pre.primaryPharmacy) {
+        return emptyResponse(
+          routed.originalQuery,
+          "I don't have a pharmacy on file yet.",
+          ['What medications am I taking?'],
+        );
+      }
+      return {
+        ...blankResponse(
+          routed.originalQuery,
+          `Your pharmacy is ${pre.primaryPharmacy}.`,
+        ),
+        suggestedFollowUps: ['What medications am I taking?', 'Any refills due?'],
+      };
+    }
+
+    case 'total_owed': {
+      if (pre.openBillCount === 0) {
+        return {
+          ...blankResponse(
+            routed.originalQuery,
+            'No open bills on file.',
+          ),
+          suggestedFollowUps: ['What is my insurance?', 'What appointments do I have?'],
+        };
+      }
+      const owedStr = pre.totalOwed != null ? `$${pre.totalOwed.toFixed(2)}` : null;
+      const billLabel = pre.openBillCount === 1 ? 'bill' : 'bills';
+      const shortAnswer = owedStr
+        ? `You owe ${owedStr} across ${pre.openBillCount} ${billLabel}.`
+        : `You have ${pre.openBillCount} open ${billLabel} on file.`;
+      return {
+        ...blankResponse(routed.originalQuery, shortAnswer),
+        suggestedFollowUps: ['Show my active bills', 'What is my insurance?'],
+      };
+    }
+
+    case 'is_up_to_date': {
+      const dueTotal = pre.preventiveDueCount + pre.preventiveDueSoonCount;
+      if (dueTotal === 0) {
+        return {
+          ...blankResponse(
+            routed.originalQuery,
+            "You're all caught up on your preventive care.",
+          ),
+          suggestedFollowUps: ['When is my next appointment?', 'What medications am I taking?'],
+        };
+      }
+      const dueLabel = pre.preventiveDueCount > 0
+        ? `${pre.preventiveDueCount} due now`
+        : `${pre.preventiveDueSoonCount} coming up`;
+      return {
+        ...blankResponse(
+          routed.originalQuery,
+          `Not quite — you have ${dueLabel}. Want to see them?`,
+        ),
+        suggestedFollowUps: ['What screenings am I due for?', 'What immunizations do I need?'],
+      };
+    }
+
+    default:
+      return emptyResponseForIntent(
+        routed.originalQuery,
+        "I don't have that information yet.",
+        intent,
+        index,
+      );
+  }
+}
+
+function computeAge(dobIso: string): number | null {
+  const dob = new Date(dobIso);
+  if (Number.isNaN(dob.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - dob.getFullYear();
+  const m = today.getMonth() - dob.getMonth();
+  if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+  return age >= 0 ? age : null;
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────
 
 export interface ExecuteQueryParams {
@@ -1626,5 +1852,7 @@ export function executeQuery({ routedQuery, profileIndex }: ExecuteQueryParams):
       return executeGetHistory(routedQuery, profileIndex, intent);
     case 'get_count':
       return executeGetCount(routedQuery, profileIndex, intent);
+    case 'compute':
+      return executeCompute(routedQuery, profileIndex, intent);
   }
 }
