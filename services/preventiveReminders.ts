@@ -450,6 +450,7 @@ export function sortByPreventivePriority(
       completed: 4,
       deferred: 5,
       declined: 5,
+      archived: 6,
     };
     const oa = order[a.status] ?? 6;
     const ob = order[b.status] ?? 6;

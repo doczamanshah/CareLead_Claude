@@ -497,6 +497,11 @@ export async function runAndPersistScan(
     return { success: false, error: upsertRes.error };
   }
 
+  // Archive items whose rule no longer applies to this profile.
+  if (scan.itemsToArchive.length > 0) {
+    await archivePreventiveItems(scan.itemsToArchive, profileId, householdId);
+  }
+
   return {
     success: true,
     data: {
@@ -505,6 +510,58 @@ export async function runAndPersistScan(
       lastScannedAt: new Date().toISOString(),
     },
   };
+}
+
+/**
+ * Flip a batch of preventive_items to 'archived' with a per-item rationale.
+ * Emits a status_changed event for each transition. Skips items that were
+ * already archived or completed (the engine already filters these, but be
+ * defensive).
+ */
+async function archivePreventiveItems(
+  archives: { itemId: string; ruleId: string; reason: string }[],
+  profileId: string,
+  householdId: string,
+): Promise<void> {
+  const ids = archives.map((a) => a.itemId);
+  if (ids.length === 0) return;
+
+  const { data: priorRows } = await supabase
+    .from('preventive_items')
+    .select('id, status')
+    .in('id', ids);
+  const priorByItem = new Map<string, PreventiveStatus>();
+  for (const row of (priorRows ?? []) as { id: string; status: PreventiveStatus }[]) {
+    priorByItem.set(row.id, row.status);
+  }
+
+  for (const a of archives) {
+    const prior = priorByItem.get(a.itemId);
+    if (!prior || prior === 'archived' || prior === 'completed') continue;
+
+    const { error } = await supabase
+      .from('preventive_items')
+      .update({
+        status: 'archived',
+        rationale: a.reason,
+        due_date: null,
+        missing_data: [],
+      })
+      .eq('id', a.itemId);
+
+    if (error) continue; // Non-fatal — leave item as-is and keep scanning.
+
+    await createPreventiveEvent({
+      itemId: a.itemId,
+      profileId,
+      householdId,
+      eventType: 'status_changed',
+      fromStatus: prior,
+      toStatus: 'archived',
+      detail: { reason: a.reason, trigger: 'eligibility_scan' },
+      createdBy: 'system',
+    });
+  }
 }
 
 // ── User Actions (date, defer, decline, reopen) ───────────────────────────

@@ -1592,8 +1592,8 @@ function LastScreeningSection({
 // ── Missing Data Card ──────────────────────────────────────────────────────
 
 const SEX_OPTIONS = [
-  { label: 'Male', value: 'Male' },
-  { label: 'Female', value: 'Female' },
+  { label: 'Male', value: 'male' },
+  { label: 'Female', value: 'female' },
 ];
 
 function MissingDataCard({

@@ -4,12 +4,12 @@
  * in the items it already has.
  */
 
-import { PREVENTIVE_CATEGORY_LABELS } from '@/lib/types/preventive';
 import type {
   PreventiveCategoryStat,
   PreventiveItemWithRule,
   PreventiveMetrics,
 } from '@/lib/types/preventive';
+import { getDisplayGroup } from '@/lib/utils/preventiveDisplayGroup';
 
 interface CalcParams {
   profileId: string;
@@ -28,8 +28,13 @@ export function calculatePreventiveMetrics(
 
   // Declined/deferred items don't count toward compliance — they reflect
   // patient choice and we shouldn't penalize the score for respecting it.
+  // Archived items don't apply to this patient at all and are excluded
+  // from every calculation.
   const relevant = items.filter(
-    (i) => i.status !== 'declined' && i.status !== 'deferred',
+    (i) =>
+      i.status !== 'declined' &&
+      i.status !== 'deferred' &&
+      i.status !== 'archived',
   );
 
   const totalMeasures = relevant.length;
@@ -90,15 +95,22 @@ export function calculatePreventiveMetrics(
     }
   }
 
-  // By-category rollup
+  // By-display-group rollup — uses the UI grouping (Cancer Screenings,
+  // Immunizations, Diabetes Care, Heart & Vascular, Behavioral Health,
+  // Wellness) so the metrics card matches the dashboard layout. Only
+  // groups with at least one applicable item appear.
   const byCategory: Record<string, PreventiveCategoryStat> = {};
   for (const item of relevant) {
-    const label =
-      PREVENTIVE_CATEGORY_LABELS[item.rule.category] ?? item.rule.category;
-    if (!byCategory[label]) byCategory[label] = { total: 0, upToDate: 0 };
-    byCategory[label].total += 1;
+    const group = getDisplayGroup({
+      code: item.rule.code,
+      category: item.rule.category,
+      condition_triggers: item.rule.condition_triggers,
+      is_condition_dependent: item.rule.is_condition_dependent,
+    });
+    if (!byCategory[group.label]) byCategory[group.label] = { total: 0, upToDate: 0 };
+    byCategory[group.label].total += 1;
     if (item.status === 'up_to_date' || item.status === 'completed') {
-      byCategory[label].upToDate += 1;
+      byCategory[group.label].upToDate += 1;
     }
   }
 

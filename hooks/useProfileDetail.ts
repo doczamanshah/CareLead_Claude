@@ -5,7 +5,10 @@ import {
   updateProfile,
   addProfileFact,
   deleteProfileFact,
+  fetchUserProfiles,
 } from '@/services/profiles';
+import { runAndPersistScan } from '@/services/preventive';
+import { useProfileStore } from '@/stores/profileStore';
 import type { ProfileFact } from '@/lib/types/profile';
 
 export function useProfileDetail(profileId: string | null) {
@@ -24,6 +27,7 @@ export function useProfileDetail(profileId: string | null) {
 export function useUpdateProfile(profileId: string) {
   const queryClient = useQueryClient();
   const { user } = useAuth();
+  const setProfiles = useProfileStore((s) => s.setProfiles);
 
   return useMutation({
     mutationFn: async (data: {
@@ -33,11 +37,33 @@ export function useUpdateProfile(profileId: string) {
     }) => {
       const result = await updateProfile(profileId, data);
       if (!result.success) throw new Error(result.error);
-      return result.data;
+      return { profile: result.data, changed: data };
     },
-    onSuccess: () => {
+    onSuccess: async ({ profile, changed }) => {
       queryClient.invalidateQueries({ queryKey: ['profile', 'detail', profileId] });
       queryClient.invalidateQueries({ queryKey: ['profiles', 'list', user?.id] });
+
+      // Refresh the Zustand profile store so activeProfile picks up the
+      // new demographics immediately (gender/DOB drive preventive eligibility).
+      if (user?.id) {
+        const refreshed = await fetchUserProfiles(user.id);
+        if (refreshed.success) setProfiles(refreshed.data);
+      }
+
+      // If gender or DOB changed, the engine needs to re-evaluate eligibility
+      // (sex-specific and age-specific rules archive or re-emerge).
+      const demographicsChanged =
+        'gender' in changed || 'date_of_birth' in changed;
+      if (demographicsChanged && profile.household_id) {
+        try {
+          await runAndPersistScan(profile.id, profile.household_id);
+        } catch {
+          // Non-fatal — user can manually rescan.
+        }
+        queryClient.invalidateQueries({ queryKey: ['preventive', 'items', profile.id] });
+        queryClient.invalidateQueries({ queryKey: ['preventive', 'briefing', profile.id] });
+        queryClient.invalidateQueries({ queryKey: ['preventive', 'metrics', profile.id] });
+      }
     },
   });
 }

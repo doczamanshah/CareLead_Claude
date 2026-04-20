@@ -1,5 +1,20 @@
 import { supabase } from '@/lib/supabase';
 import type { Profile, ProfileFact, ProfileWithFacts } from '@/lib/types/profile';
+import { normalizeSexForEligibility } from '@/lib/utils/gender';
+
+/**
+ * Canonicalize a gender value before writing to the DB. If the value
+ * normalizes to male/female (incl. 'Male', 'Female', 'm', 'f', etc.), store
+ * the lowercase canonical form so the preventive eligibility engine and any
+ * downstream readers see a consistent value. Leave other values (null,
+ * 'Non-binary', 'Prefer not to say', etc.) untouched.
+ */
+function canonicalizeGender(value: string | null | undefined): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const canonical = normalizeSexForEligibility(value);
+  return canonical ?? value;
+}
 
 type ServiceResult<T> =
   | { success: true; data: T }
@@ -118,9 +133,14 @@ export async function updateProfile(
     gender?: string | null;
   },
 ): Promise<ServiceResult<Profile>> {
+  const patch: typeof data = { ...data };
+  if ('gender' in patch) {
+    patch.gender = canonicalizeGender(patch.gender) as string | null | undefined;
+  }
+
   const { data: profile, error } = await supabase
     .from('profiles')
-    .update(data)
+    .update(patch)
     .eq('id', profileId)
     .select()
     .single();
@@ -147,7 +167,10 @@ export async function updateProfileBasics(
 ): Promise<ServiceResult<void>> {
   const patch: { date_of_birth?: string; gender?: string } = {};
   if (updates.dateOfBirth) patch.date_of_birth = updates.dateOfBirth;
-  if (updates.gender) patch.gender = updates.gender;
+  if (updates.gender) {
+    const canonical = canonicalizeGender(updates.gender);
+    if (typeof canonical === 'string') patch.gender = canonical;
+  }
 
   if (Object.keys(patch).length > 0) {
     const { error } = await supabase

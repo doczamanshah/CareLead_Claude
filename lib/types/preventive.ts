@@ -10,7 +10,8 @@ export type PreventiveStatus =
   | 'up_to_date'
   | 'needs_review'
   | 'deferred'
-  | 'declined';
+  | 'declined'
+  | 'archived';
 
 export type PreventiveCategory =
   | 'cancer_screening'
@@ -277,6 +278,7 @@ export const PREVENTIVE_STATUS_LABELS: Record<PreventiveStatus, string> = {
   needs_review: 'Needs Review',
   deferred: 'Deferred',
   declined: 'Declined',
+  archived: 'Archived',
 };
 
 export const PREVENTIVE_CATEGORY_LABELS: Record<PreventiveCategory, string> = {
@@ -297,4 +299,66 @@ export const PREVENTIVE_STATUS_COLORS: Record<PreventiveStatus, string> = {
   needs_review: COLORS.accent.DEFAULT,
   deferred: COLORS.text.tertiary,
   declined: COLORS.text.tertiary,
+  archived: COLORS.text.tertiary,
+};
+
+// ── Display Categories (UI-only grouping) ──────────────────────────────
+// Clinical groupings used on the dashboard. Rules are mapped to one of
+// these at render time based on category + code + condition_triggers.
+
+export type PreventiveDisplayGroupKey =
+  | 'cancer'
+  | 'immunizations'
+  | 'diabetes'
+  | 'cardiovascular'
+  | 'behavioral'
+  | 'wellness';
+
+export interface PreventiveDisplayGroup {
+  key: PreventiveDisplayGroupKey;
+  label: string;
+  icon: string;
+  sortOrder: number;
+}
+
+export const PREVENTIVE_DISPLAY_GROUPS: Record<
+  PreventiveDisplayGroupKey,
+  PreventiveDisplayGroup
+> = {
+  cancer: {
+    key: 'cancer',
+    label: 'Cancer Screenings',
+    icon: 'ribbon-outline',
+    sortOrder: 1,
+  },
+  immunizations: {
+    key: 'immunizations',
+    label: 'Immunizations',
+    icon: 'medkit-outline',
+    sortOrder: 2,
+  },
+  diabetes: {
+    key: 'diabetes',
+    label: 'Diabetes Care',
+    icon: 'water-outline',
+    sortOrder: 3,
+  },
+  cardiovascular: {
+    key: 'cardiovascular',
+    label: 'Heart & Vascular',
+    icon: 'heart-outline',
+    sortOrder: 4,
+  },
+  behavioral: {
+    key: 'behavioral',
+    label: 'Behavioral Health',
+    icon: 'happy-outline',
+    sortOrder: 5,
+  },
+  wellness: {
+    key: 'wellness',
+    label: 'Wellness',
+    icon: 'body-outline',
+    sortOrder: 6,
+  },
 };

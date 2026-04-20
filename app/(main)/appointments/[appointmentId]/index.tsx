@@ -24,6 +24,9 @@ import {
 } from '@/hooks/useCloseout';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
 import { usePreAppointmentCheck } from '@/hooks/usePreAppointmentCheck';
+import { usePreventiveItems } from '@/hooks/usePreventive';
+import { useWellnessVisitStore } from '@/stores/wellnessVisitStore';
+import { WELLNESS_STEPS } from '@/lib/types/wellnessVisit';
 import { COLORS } from '@/lib/constants/colors';
 import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import {
@@ -87,6 +90,17 @@ export default function AppointmentDetailScreen() {
     appointment?.provider_name ?? null,
   );
   const generateSummary = useGenerateVisitSummary();
+  const { data: preventiveItems } = usePreventiveItems(
+    appointment?.profile_id ?? null,
+  );
+  const setAppointmentIdOnStore = useWellnessVisitStore(
+    (s) => s.setAppointmentId,
+  );
+  const wellnessStoreAppointmentId = useWellnessVisitStore(
+    (s) => s.appointmentId,
+  );
+  const wellnessStepsCompleted = useWellnessVisitStore((s) => s.stepsCompleted);
+  const wellnessPacketGenerated = useWellnessVisitStore((s) => s.packetGenerated);
   const [summaryText, setSummaryText] = useState<string | null>(null);
   const [summaryExpanded, setSummaryExpanded] = useState(false);
 
@@ -280,6 +294,63 @@ export default function AppointmentDetailScreen() {
             </View>
           </Card>
         )}
+
+        {/* Make this your annual wellness visit? — only for upcoming doctor visits
+            when the wellness visit is due/due_soon and prep hasn't been finalized. */}
+        {appointment.appointment_type === 'doctor' &&
+          appointment.status !== 'cancelled' &&
+          appointment.status !== 'rescheduled' &&
+          appointment.status !== 'completed' &&
+          new Date(appointment.start_time).getTime() > Date.now() &&
+          (() => {
+            const aw = (preventiveItems ?? []).find(
+              (i) => i.rule.code === 'annual_wellness_visit',
+            );
+            const dueOrSoon =
+              aw?.status === 'due' ||
+              aw?.status === 'due_soon' ||
+              aw?.status === 'needs_review';
+            if (!dueOrSoon) return null;
+            if (wellnessPacketGenerated) return null;
+
+            const completed = Object.values(wellnessStepsCompleted).filter(
+              Boolean,
+            ).length;
+            const inProgress = completed > 0;
+            const linked = wellnessStoreAppointmentId === appointmentId;
+
+            const title = linked
+              ? 'Wellness visit prep for this appointment'
+              : inProgress
+              ? 'Continue your wellness visit prep'
+              : 'Make this your annual wellness visit?';
+            const body = inProgress
+              ? `${completed} of ${WELLNESS_STEPS.length} steps done. Open the prep flow.`
+              : "Prepare in 15–20 minutes so you get the most out of the visit.";
+
+            return (
+              <Card style={styles.howItWentCard}>
+                <View style={styles.howItWentHeader}>
+                  <Ionicons
+                    name="clipboard-outline"
+                    size={20}
+                    color={COLORS.primary.DEFAULT}
+                  />
+                  <Text style={styles.howItWentTitle}>{title}</Text>
+                </View>
+                <Text style={styles.howItWentBody}>{body}</Text>
+                <View style={{ marginTop: 12 }}>
+                  <Button
+                    title={inProgress ? 'Continue prep' : 'Start prep'}
+                    onPress={() => {
+                      setAppointmentIdOnStore(appointmentId ?? null);
+                      router.push('/(main)/preventive/wellness-visit');
+                    }}
+                  />
+                </View>
+              </Card>
+            );
+          })()}
 
         {/* Pre-Visit Checklist — only for upcoming appointments */}
         {preCheck &&

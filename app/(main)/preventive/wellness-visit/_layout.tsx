@@ -1,7 +1,7 @@
 import { Stack } from 'expo-router';
 import { COLORS } from '@/lib/constants/colors';
 
-export default function PreventiveLayout() {
+export default function WellnessVisitLayout() {
   return (
     <Stack
       screenOptions={{
@@ -10,9 +10,11 @@ export default function PreventiveLayout() {
       }}
     >
       <Stack.Screen name="index" />
-      <Stack.Screen name="[id]" />
-      <Stack.Screen name="intent-review" />
-      <Stack.Screen name="wellness-visit" />
+      <Stack.Screen name="freeform" />
+      <Stack.Screen name="profile-review" />
+      <Stack.Screen name="preventive-agenda" />
+      <Stack.Screen name="questions" />
+      <Stack.Screen name="packet" />
     </Stack>
   );
 }

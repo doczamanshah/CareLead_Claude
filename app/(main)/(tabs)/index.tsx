@@ -56,6 +56,8 @@ import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
 import type { Task } from '@/lib/types/tasks';
 import { LifeEventPromptCard } from '@/components/LifeEventPromptCard';
 import { useLifeEventStore } from '@/stores/lifeEventStore';
+import { useWellnessVisitStore } from '@/stores/wellnessVisitStore';
+import { WELLNESS_STEPS } from '@/lib/types/wellnessVisit';
 import { useAddProfileFact, useDeleteProfileFact } from '@/hooks/useProfileDetail';
 import type { LifeEventPrompt } from '@/lib/types/lifeEvents';
 import {
@@ -153,6 +155,20 @@ export default function HomeScreen() {
   const { data: resultsBriefing } = useResultsBriefing(activeProfileId, 2);
   const { data: preventiveItems } = usePreventiveItems(activeProfileId);
   const { data: preventiveBriefing } = usePreventiveBriefing(activeProfileId, 2);
+
+  // Wellness visit prep — briefing card when due or in progress
+  const wellnessHydrated = useWellnessVisitStore((s) => s.hydrated);
+  const wellnessHydrate = useWellnessVisitStore((s) => s.hydrate);
+  const wellnessStepsCompleted = useWellnessVisitStore((s) => s.stepsCompleted);
+  const wellnessPacketGenerated = useWellnessVisitStore((s) => s.packetGenerated);
+  const wellnessFreeformLen = useWellnessVisitStore((s) => s.freeformInput.length);
+  const wellnessSelectedCount = useWellnessVisitStore(
+    (s) => s.selectedScreenings.length,
+  );
+  const wellnessQuestionCount = useWellnessVisitStore((s) => s.questions.length);
+  useEffect(() => {
+    if (!wellnessHydrated) void wellnessHydrate();
+  }, [wellnessHydrated, wellnessHydrate]);
   const { data: postVisitBriefing } = usePostVisitBriefing(activeProfileId, 3);
   const { data: preAppointmentBriefing } = usePreAppointmentBriefing(
     activeProfileId,
@@ -358,7 +374,46 @@ export default function HomeScreen() {
 
     const billingItems: BillingBriefingItem[] = billingBriefing ?? [];
     const resultsItems: ResultsBriefingItem[] = resultsBriefing ?? [];
-    const preventiveItems: PreventiveBriefingItem[] = preventiveBriefing ?? [];
+    const preventiveItemsBriefing: PreventiveBriefingItem[] = preventiveBriefing ?? [];
+
+    // Wellness visit prep briefing — either "due" (not started) or "in progress"
+    const annualWellness = (preventiveItems ?? []).find(
+      (i) => i.rule.code === 'annual_wellness_visit',
+    );
+    const annualWellnessDue =
+      annualWellness?.status === 'due' ||
+      annualWellness?.status === 'due_soon' ||
+      annualWellness?.status === 'needs_review';
+    const wellnessCompletedCount = Object.values(wellnessStepsCompleted).filter(
+      Boolean,
+    ).length;
+    const wellnessStarted =
+      wellnessCompletedCount > 0 ||
+      wellnessFreeformLen > 0 ||
+      wellnessSelectedCount > 0 ||
+      wellnessQuestionCount > 0;
+
+    const wellnessPrepBriefing: {
+      key: string;
+      message: string;
+      priority: 'high' | 'medium';
+    } | null =
+      wellnessPacketGenerated
+        ? null
+        : wellnessStarted
+        ? {
+            key: 'wellness_prep_in_progress',
+            message: `Continue your wellness visit prep (${wellnessCompletedCount} of ${WELLNESS_STEPS.length} steps)`,
+            priority: 'medium',
+          }
+        : annualWellnessDue
+        ? {
+            key: 'wellness_prep_due',
+            message:
+              'Your annual wellness visit is coming up. Start preparing?',
+            priority: 'high',
+          }
+        : null;
     const postVisitItems: PostVisitBriefingItem[] = postVisitBriefing ?? [];
     const preAppointmentItems: PreAppointmentBriefingItem[] =
       preAppointmentBriefing ?? [];
@@ -375,7 +430,8 @@ export default function HomeScreen() {
       attentionCount === 0 &&
       billingItems.length === 0 &&
       resultsItems.length === 0 &&
-      preventiveItems.length === 0 &&
+      preventiveItemsBriefing.length === 0 &&
+      !wellnessPrepBriefing &&
       postVisitItems.length === 0 &&
       preAppointmentItems.length === 0 &&
       caregiverEnrichmentItems.length === 0 &&
@@ -389,7 +445,8 @@ export default function HomeScreen() {
       (attentionCount > 0 ? 1 : 0) +
       billingItems.length +
       resultsItems.length +
-      preventiveItems.length +
+      preventiveItemsBriefing.length +
+      (wellnessPrepBriefing ? 1 : 0) +
       postVisitItems.length +
       preAppointmentItems.length +
       caregiverEnrichmentItems.length +
@@ -406,7 +463,8 @@ export default function HomeScreen() {
       attentionCount,
       billingItems,
       resultsItems,
-      preventiveItems,
+      preventiveItems: preventiveItemsBriefing,
+      wellnessPrepBriefing,
       postVisitItems,
       preAppointmentItems,
       caregiverEnrichmentItems,
@@ -415,7 +473,25 @@ export default function HomeScreen() {
       nothingDue,
       briefingLineCount,
     };
-  }, [todaysDoses, allAppointments, openTasks, billingBriefing, resultsBriefing, preventiveBriefing, postVisitBriefing, preAppointmentBriefing, profileReviewDue, caregiverPrompts, dataQualityBriefing]);
+  }, [
+    todaysDoses,
+    allAppointments,
+    openTasks,
+    billingBriefing,
+    resultsBriefing,
+    preventiveBriefing,
+    preventiveItems,
+    postVisitBriefing,
+    preAppointmentBriefing,
+    profileReviewDue,
+    caregiverPrompts,
+    dataQualityBriefing,
+    wellnessStepsCompleted,
+    wellnessPacketGenerated,
+    wellnessFreeformLen,
+    wellnessSelectedCount,
+    wellnessQuestionCount,
+  ]);
 
   // Module stats
   const moduleStats = useMemo(() => {
@@ -929,6 +1005,33 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                       );
                     })}
+                    {briefing.wellnessPrepBriefing && (
+                      <TouchableOpacity
+                        key={briefing.wellnessPrepBriefing.key}
+                        style={styles.briefingLine}
+                        activeOpacity={0.7}
+                        onPress={(e) => {
+                          e.stopPropagation?.();
+                          router.push('/(main)/preventive/wellness-visit');
+                        }}
+                      >
+                        <Ionicons
+                          name="clipboard-outline"
+                          size={18}
+                          color={
+                            briefing.wellnessPrepBriefing.priority === 'high'
+                              ? COLORS.primary.DEFAULT
+                              : COLORS.text.secondary
+                          }
+                        />
+                        <Text
+                          style={styles.briefingLineText}
+                          numberOfLines={2}
+                        >
+                          {briefing.wellnessPrepBriefing.message}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
                     {briefing.caregiverEnrichmentItems.map((item) => {
                       const iconColor =
                         item.priority === 'high'

@@ -234,9 +234,16 @@ function buildStandaloneEntry(
 function buildProgressItem(
   items: PreventiveItemWithRule[],
 ): PreventiveBriefingStrategyItem | null {
-  if (items.length < 3) return null;
-  const total = items.length;
-  const done = items.filter(
+  // Exclude archived/deferred/declined — they aren't part of the active set.
+  const applicable = items.filter(
+    (i) =>
+      i.status !== 'archived' &&
+      i.status !== 'deferred' &&
+      i.status !== 'declined',
+  );
+  if (applicable.length < 3) return null;
+  const total = applicable.length;
+  const done = applicable.filter(
     (i) => i.status === 'up_to_date' || i.status === 'completed',
   ).length;
   if (total === 0) return null;
@@ -245,7 +252,7 @@ function buildProgressItem(
 
   // Anchor the celebratory message to the first up-to-date item so the UI
   // can still navigate somewhere.
-  const anchor = items.find(
+  const anchor = applicable.find(
     (i) => i.status === 'up_to_date' || i.status === 'completed',
   );
   if (!anchor) return null;

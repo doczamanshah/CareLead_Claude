@@ -7,6 +7,17 @@
  * The engine is intentionally explainable: for every proposed upsert it
  * produces a human-readable rationale and, when data is missing, a list
  * of prompts that would unlock a better recommendation.
+ *
+ * Filtering rules (Phase 3 Item 5c):
+ *   • Rules that don't apply to the patient (wrong age, wrong sex, missing
+ *     condition) are SKIPPED — no preventive_item is created. Previously
+ *     these surfaced as "Needs Review," which was misleading.
+ *   • When DOB is missing, only age-agnostic adult rules (min_age=18,
+ *     max_age=null) are evaluated.
+ *   • When sex is missing, only sex-neutral rules are evaluated.
+ *   • Existing items for rules that no longer apply (user aged out, sex
+ *     mismatch now known, condition resolved) are returned in
+ *     `itemsToArchive` so the orchestrator can mark them 'archived'.
  */
 
 import type {
@@ -19,6 +30,7 @@ import type {
   SeasonalWindow,
 } from '@/lib/types/preventive';
 import { matchesCondition } from '@/lib/utils/conditionMatcher';
+import { normalizeSexForEligibility } from '@/lib/utils/gender';
 
 export interface EligibilityProfileFacts {
   dateOfBirth: string | null;
@@ -39,10 +51,25 @@ export interface PreventiveItemUpsert {
   selectedMethod: string | null;
 }
 
+export interface PreventiveItemArchive {
+  itemId: string;
+  ruleId: string;
+  reason: string;
+}
+
 export interface EligibilityScanResult {
   itemsToUpsert: PreventiveItemUpsert[];
   itemsUnchanged: string[];
+  /** Existing items whose rule no longer applies — orchestrator archives these. */
+  itemsToArchive: PreventiveItemArchive[];
+  /** Rules we didn't create an item for (with reason). */
   skippedRules: { ruleId: string; reason: string }[];
+  /** DOB is missing — age-dependent rules couldn't be evaluated. */
+  needsDOB: boolean;
+  /** Sex is missing — sex-specific rules couldn't be evaluated. */
+  needsSex: boolean;
+  /** Count of rules skipped due to insufficient demographic data. */
+  skippedCount: number;
 }
 
 export interface RunEligibilityScanParams {
@@ -85,13 +112,8 @@ function calculateAge(dob: Date, today: Date): number {
   return age;
 }
 
-function normalizeSex(value: string | null): 'male' | 'female' | null {
-  if (!value) return null;
-  const v = value.toLowerCase().trim();
-  if (v === 'm' || v === 'male' || v === 'man') return 'male';
-  if (v === 'f' || v === 'female' || v === 'woman') return 'female';
-  return null;
-}
+/** @deprecated use normalizeSexForEligibility from '@/lib/utils/gender' */
+const normalizeSex = normalizeSexForEligibility;
 
 function humanizeInterval(fromDate: Date, toDate: Date): string {
   const ms = Math.abs(toDate.getTime() - fromDate.getTime());
@@ -134,10 +156,15 @@ function guidelineFootnote(rule: PreventiveRule): string {
 }
 
 /**
- * Resolve which cadence applies, preferring the user's selected method when
- * screening_methods are defined. Returns null when no cadence is known (e.g.
- * user hasn't picked a method yet, or the rule is one-time).
+ * Is this rule safe to evaluate without a known DOB? Only broad-adult rules
+ * (min_age=18, max_age=null, not condition-dependent) qualify. We assume
+ * authenticated users are adults; that's the only assumption we'll make.
  */
+function isAgeAgnosticAdultRule(rule: PreventiveRule): boolean {
+  const c = rule.eligibility_criteria;
+  return c.min_age === 18 && c.max_age === null && !rule.is_condition_dependent;
+}
+
 function resolveCadence(
   rule: PreventiveRule,
   selectedMethodId: string | null,
@@ -159,7 +186,6 @@ function isInSeason(today: Date, window: SeasonalWindow): boolean {
   if (start_month <= end_month) {
     return month >= start_month && month <= end_month;
   }
-  // Wraparound (e.g., Nov–Feb)
   return month >= start_month || month <= end_month;
 }
 
@@ -195,7 +221,20 @@ export function runEligibilityScan(
 
   const itemsToUpsert: PreventiveItemUpsert[] = [];
   const itemsUnchanged: string[] = [];
+  const itemsToArchive: PreventiveItemArchive[] = [];
   const skippedRules: { ruleId: string; reason: string }[] = [];
+
+  let needsDOB = false;
+  let needsSex = false;
+
+  // Helper: when a rule doesn't apply and an existing item is present,
+  // queue it for archival (unless it's already archived or completed).
+  const queueArchive = (rule: PreventiveRule, reason: string) => {
+    const existing = existingByRule.get(rule.id);
+    if (!existing) return;
+    if (existing.status === 'archived' || existing.status === 'completed') return;
+    itemsToArchive.push({ itemId: existing.id, ruleId: rule.id, reason });
+  };
 
   for (const rule of rules) {
     if (!rule.is_active) {
@@ -216,75 +255,60 @@ export function runEligibilityScan(
       continue;
     }
 
+    // ── Archived items are left alone unless re-eligible ─────────────
+    // (We only re-evaluate them below if they pass all filters; otherwise
+    // they stay archived.)
+
     // ── Condition-triggered rules ─────────────────────────────────────
-    // When a rule has condition_triggers we test the patient's condition
-    // list. is_condition_dependent decides whether a condition match is
-    // required or merely an alternative entry point.
     const triggers = rule.condition_triggers ?? null;
     const conditionHit = triggers ? matchesCondition(profileFacts.conditions, triggers) : false;
 
-    if (rule.is_condition_dependent) {
-      if (!conditionHit) {
+    if (rule.is_condition_dependent && !conditionHit) {
+      skippedRules.push({
+        ruleId: rule.id,
+        reason: 'Rule requires a matching condition and none is present',
+      });
+      queueArchive(rule, 'No longer applicable — related condition is no longer on file');
+      continue;
+    }
+
+    // ── DOB filtering ─────────────────────────────────────────────────
+    if (!dob || age === null) {
+      if (!isAgeAgnosticAdultRule(rule)) {
+        needsDOB = true;
         skippedRules.push({
           ruleId: rule.id,
-          reason: 'Rule requires a matching condition and none is present',
+          reason: 'Age-dependent rule skipped — date of birth is missing',
         });
+        // Don't archive: we don't KNOW this doesn't apply — we just can't tell.
+        continue;
+      }
+      // Else: fall through and evaluate (we'll skip the age check below).
+    } else {
+      // We have an age. Bounds-check.
+      const ageOk =
+        (criteria.min_age === null || age >= criteria.min_age) &&
+        (criteria.max_age === null || age <= criteria.max_age);
+
+      if (!ageOk) {
+        skippedRules.push({
+          ruleId: rule.id,
+          reason: `Age ${age} outside ${criteria.min_age ?? '-'}–${criteria.max_age ?? '-'}`,
+        });
+        queueArchive(rule, 'No longer applicable based on age');
         continue;
       }
     }
 
-    // ── Missing DOB → needs_review ────────────────────────────────────
-    if (!dob || age === null) {
-      const missingData: PreventiveMissingDataEntry[] = [
-        {
-          field: 'date_of_birth',
-          prompt: 'What is your date of birth? We need this to check which screenings apply to you.',
-        },
-      ];
-      const rationale = `Recommended for ${audience}. ${footnote} To give you a personalized recommendation, we need your date of birth.`;
-      upsertNeedsReview(rule, existing, rationale, missingData, hedis, itemsToUpsert);
-      continue;
-    }
-
-    // ── Age check ─────────────────────────────────────────────────────
-    // For is_condition_dependent rules a condition match is sufficient —
-    // age bounds still apply when specified, but only as a hard cap.
-    // For non-condition-dependent rules, age/sex must match OR a
-    // condition trigger must hit.
-    const ageOk =
-      (criteria.min_age === null || age >= criteria.min_age) &&
-      (criteria.max_age === null || age <= criteria.max_age);
-
-    if (!ageOk && !rule.is_condition_dependent && !conditionHit) {
-      skippedRules.push({
-        ruleId: rule.id,
-        reason: `Age ${age} outside ${criteria.min_age ?? '-'}–${criteria.max_age ?? '-'}`,
-      });
-      continue;
-    }
-
-    if (!ageOk && rule.is_condition_dependent) {
-      // Condition present but outside the rule's age bounds. Skip to
-      // avoid recommending e.g. lung cancer screening at age 45.
-      skippedRules.push({
-        ruleId: rule.id,
-        reason: `Age ${age} outside condition-dependent rule bounds`,
-      });
-      continue;
-    }
-
-    // ── Sex check ─────────────────────────────────────────────────────
+    // ── Sex filtering ─────────────────────────────────────────────────
     if (criteria.sex !== 'any') {
       if (!normalizedSex) {
-        const missingData: PreventiveMissingDataEntry[] = [
-          {
-            field: 'sex',
-            prompt:
-              'To check whether this screening applies to you, we need to know your sex assigned at birth.',
-          },
-        ];
-        const rationale = `Recommended for ${audience}. ${footnote} We need a bit more information to confirm whether this applies to you.`;
-        upsertNeedsReview(rule, existing, rationale, missingData, hedis, itemsToUpsert);
+        needsSex = true;
+        skippedRules.push({
+          ruleId: rule.id,
+          reason: 'Sex-specific rule skipped — sex is missing',
+        });
+        // Don't archive — we don't know yet.
         continue;
       }
       if (normalizedSex !== criteria.sex) {
@@ -292,13 +316,12 @@ export function runEligibilityScan(
           ruleId: rule.id,
           reason: `Sex ${normalizedSex} does not match required ${criteria.sex}`,
         });
+        queueArchive(rule, 'No longer applicable based on sex');
         continue;
       }
     }
 
     // ── Legacy conditions on eligibility_criteria ─────────────────────
-    // (Old rules used criteria.conditions as a soft prompt rather than
-    // the new condition_triggers. Preserve that behavior.)
     let legacyConditionMissing = false;
     if (criteria.conditions && criteria.conditions.length > 0) {
       const hasAny = criteria.conditions.some((c) => lowerConditions.includes(c.toLowerCase()));
@@ -313,6 +336,10 @@ export function runEligibilityScan(
       continue;
     }
 
+    // An archived item that's become applicable again should be resurrected
+    // as needs_review so the user sees it flow back into the dashboard.
+    const isResurrecting = existing?.status === 'archived';
+
     const missingData: PreventiveMissingDataEntry[] = [];
     if (legacyConditionMissing && criteria.conditions) {
       missingData.push({
@@ -322,9 +349,6 @@ export function runEligibilityScan(
     }
 
     // ── Screening method prompt ───────────────────────────────────────
-    // If the rule has multiple methods and the patient has a last_done
-    // but hasn't told us which method they did, we need that before we
-    // can compute next_due accurately.
     const hasMethods = rule.screening_methods && rule.screening_methods.length > 0;
     if (hasMethods && existing?.last_done_date && !selectedMethodId) {
       const methodList = (rule.screening_methods ?? []).map((m) => m.name).join(', ');
@@ -345,6 +369,7 @@ export function runEligibilityScan(
         selectedMethodId,
         itemsToUpsert,
         itemsUnchanged,
+        isResurrecting,
       );
       continue;
     }
@@ -381,14 +406,12 @@ export function runEligibilityScan(
         selectedMethodId,
         itemsToUpsert,
         itemsUnchanged,
+        isResurrecting,
       );
       continue;
     }
 
-    // We have a last_done_date.
     if (effectiveCadence === null || effectiveCadence <= 0) {
-      // One-time series (e.g. shingles, HPV, Hep B) or rule with methods
-      // but no method picked (handled above already).
       const rationale = `One-time recommendation for ${audience}. ${footnote} Completed on ${formatHumanDate(lastDone)}.`;
       upsertProposal(
         rule,
@@ -402,6 +425,7 @@ export function runEligibilityScan(
         selectedMethodId,
         itemsToUpsert,
         itemsUnchanged,
+        isResurrecting,
       );
       continue;
     }
@@ -423,7 +447,6 @@ export function runEligibilityScan(
     const inSeason = seasonal ? isInSeason(today, seasonal) : true;
 
     if (diffDays < 0) {
-      // Overdue by the cadence clock.
       if (seasonal && !inSeason) {
         status = 'due_soon';
         const seasonStart = nextSeasonStart(today, seasonal);
@@ -456,10 +479,19 @@ export function runEligibilityScan(
       selectedMethodId,
       itemsToUpsert,
       itemsUnchanged,
+      isResurrecting,
     );
   }
 
-  return { itemsToUpsert, itemsUnchanged, skippedRules };
+  return {
+    itemsToUpsert,
+    itemsUnchanged,
+    itemsToArchive,
+    skippedRules,
+    needsDOB,
+    needsSex,
+    skippedCount: skippedRules.length,
+  };
 }
 
 function describeCadence(months: number): string {
@@ -470,36 +502,6 @@ function describeCadence(months: number): string {
     return years === 1 ? 'year' : `${years} years`;
   }
   return `${months} months`;
-}
-
-function upsertNeedsReview(
-  rule: PreventiveRule,
-  existing: PreventiveItem | undefined,
-  rationale: string,
-  missingData: PreventiveMissingDataEntry[],
-  hedis: string | null,
-  itemsToUpsert: PreventiveItemUpsert[],
-) {
-  const shouldUpdate =
-    !existing ||
-    existing.status !== 'needs_review' ||
-    existing.rationale !== rationale ||
-    JSON.stringify(existing.missing_data ?? []) !== JSON.stringify(missingData);
-
-  if (shouldUpdate) {
-    itemsToUpsert.push({
-      ruleId: rule.id,
-      ruleCode: rule.code,
-      title: rule.title,
-      status: 'needs_review',
-      dueDate: null,
-      nextDueDate: null,
-      rationale,
-      missingData,
-      hedisMeasureCode: hedis,
-      selectedMethod: existing?.selected_method ?? null,
-    });
-  }
 }
 
 function upsertProposal(
@@ -514,8 +516,12 @@ function upsertProposal(
   selectedMethod: string | null,
   itemsToUpsert: PreventiveItemUpsert[],
   itemsUnchanged: string[],
+  /** When true the prior state was 'archived' — we force an update even
+   *  if other fields match, because the status must transition. */
+  resurrecting = false,
 ) {
   if (
+    !resurrecting &&
     existing &&
     existing.status === status &&
     existing.due_date === dueDate &&
