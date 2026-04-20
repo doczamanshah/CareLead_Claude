@@ -60,7 +60,7 @@ const TRIGGER_LABELS: Record<string, string> = {
 const PRIORITIES: TaskPriority[] = ['urgent', 'high', 'medium', 'low'];
 
 const SOURCE_ROUTES: Record<TaskSourceType, (id: string) => string> = {
-  manual: () => '/(main)/(tabs)/tasks',
+  manual: () => '/(main)/(tabs)/activity',
   intent_sheet: (id) => `/(main)/intent-sheet/${id}`,
   appointment: (id) => `/(main)/appointments/${id}`,
   medication: (id) => `/(main)/medications/${id}`,

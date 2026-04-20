@@ -19,13 +19,13 @@ export default function ProfileIdLayout() {
         headerTintColor: COLORS.primary.DEFAULT,
         headerTitleStyle: { color: COLORS.text.DEFAULT },
         headerShadowVisible: false,
+        headerLeft: () => <HeaderBackButton />,
       }}
     >
       <Stack.Screen
         name="index"
         options={{
           title: 'Health Profile',
-          headerLeft: () => <HeaderBackButton />,
         }}
       />
       <Stack.Screen name="edit" options={{ title: 'Edit Profile' }} />

@@ -311,9 +311,10 @@ export default function StrengthenProfileScreen() {
             />
           </View>
           <View style={styles.bigActionBody}>
-            <Text style={styles.bigActionTitle}>Catch Up flow</Text>
+            <Text style={styles.bigActionTitle}>Batch capture</Text>
             <Text style={styles.bigActionDetail}>
-              Snap photos of bottles, cards, and documents to fill gaps fast.
+              Have documents to add? Catch Up lets you snap multiple documents
+              at once.
             </Text>
           </View>
           <Ionicons

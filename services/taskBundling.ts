@@ -20,7 +20,7 @@ const SOURCE_TITLES: Record<TaskSourceType, string> = {
 };
 
 const SOURCE_ROUTES: Record<TaskSourceType, (id: string) => string> = {
-  manual: () => '/(main)/(tabs)/tasks',
+  manual: () => '/(main)/(tabs)/activity',
   intent_sheet: (id) => `/(main)/intent-sheet/${id}`,
   appointment: (id) => `/(main)/appointments/${id}`,
   medication: (id) => `/(main)/medications/${id}`,

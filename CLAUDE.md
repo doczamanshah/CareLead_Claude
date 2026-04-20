@@ -1444,10 +1444,46 @@ Caching, performance, and cost optimization for the Ask CareLead retrieval syste
 
 **Key files for Item 6:** `services/askCache.ts`, `services/askInvalidation.ts`, `services/askOrchestrator.ts`, `services/askIntents.ts`, `services/askEngine.ts`, `services/askRouter.ts`, `services/profileIndex.ts`, `services/askGapActions.ts`, `services/commit.ts`, `lib/types/ask.ts`, `hooks/useAsk.ts`
 
+#### UI Overhaul — COMPLETE
+
+End-to-end navigation, home screen, and visual system refresh. Pure UI/UX work — no service or data-layer changes.
+
+**Part 1 — Navigation restructure:**
+- 5 new tabs: **Home**, **Health**, **Activity**, **Documents**, **Ask**
+- **Health tab** is the consolidated hub for profile / medications / conditions / results / preventive / care team
+- **Activity tab** combines tasks + appointments into a single timeline
+- **Ask** promoted from FAB to a permanent tab
+- **Settings** moved out of the tab bar to a gear icon in the header
+- FAB removed entirely; `TabHeader` component renders profile avatar + settings gear consistently across tabs
+- Old tab files removed: `household.tsx`, `settings.tsx`, `tasks.tsx`
+
+**Part 2 — Home screen redesign:**
+- Reduced from 1457 lines to **134 lines** by extracting logic into hooks and components
+- Four zones only: **Greeting**, **Today Card**, **Quick Actions Grid (2×4)**, **Needs Attention List** (max 3 items)
+- New `services/needsAttention.ts` aggregator consolidates all prompts/nudges into a single ranked list
+- `MilestoneToast` for one-time celebrations (e.g., profile tier upgrades, streak milestones)
+- Side-effect logic split into `useHomeSideEffects` hook (notification scheduling, prefetches, etc.)
+- Data-fetching logic split into `useHomeScreen` hook
+
+**Part 3 — Visual polish:**
+- Design token system in `lib/constants/design.ts`: `SPACING`, `RADIUS`, `SHADOWS`, `TYPOGRAPHY`
+- Updated color palette: warm tones, expanded status colors, accent colors
+- Reusable UI primitives: `Card`, `StatusBadge`, `SectionHeader`
+- Global warm background `#F9FAFB` replaces previous neutral
+
+**Part 3b — Quick actions grid + flow polish:**
+- 2×4 quick actions grid: **Priorities, Catch Up, Snap Photo, Import, Medications, Appointments, Voice Note, Tasks**
+- Catch Up flow integrates profile strengthening into the batch capture pipeline
+- Back-navigation fixes across all deep screens (consistent home button + chevron behavior 3+ levels deep)
+
+**Key files for the UI Overhaul:**
+- New components: `components/ui/Card.tsx`, `components/ui/StatusBadge.tsx`, `components/ui/SectionHeader.tsx`, `components/ui/TabHeader.tsx`, `components/TodayCard.tsx`, `components/QuickActionsGrid.tsx`, `components/NeedsAttentionList.tsx`, `components/MilestoneToast.tsx`, `components/modules/TasksContent.tsx`
+- New service: `services/needsAttention.ts`
+- New hooks: `hooks/useHomeScreen.ts`, `hooks/useHomeSideEffects.ts`
+- New tokens: `lib/constants/design.ts`
+- New tab screens: `app/(main)/(tabs)/health.tsx`, `app/(main)/(tabs)/activity.tsx`, `app/(main)/(tabs)/ask.tsx`
+- New settings location: `app/(main)/settings/`
+
 #### Phase 3: Remaining Items
-- [x] Item 3: Bills & EOBs simplification — COMPLETE
-- [x] Item 4: Tasks & reminders refinement — COMPLETE
-- [x] Item 5: Preventive Care expansion — COMPLETE
-- [x] Item 6: Retrieval efficiency — COMPLETE
 - [ ] Item 7: HIPAA alignment review
 - [ ] Item 8: App Store preparation

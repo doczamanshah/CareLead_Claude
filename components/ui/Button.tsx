@@ -1,6 +1,13 @@
-import { TouchableOpacity, Text, ActivityIndicator, StyleSheet, ViewStyle, TextStyle } from 'react-native';
+import {
+  TouchableOpacity,
+  Text,
+  ActivityIndicator,
+  StyleSheet,
+  ViewStyle,
+  TextStyle,
+} from 'react-native';
 import { COLORS } from '@/lib/constants/colors';
-import { FONT_SIZES, FONT_WEIGHTS } from '@/lib/constants/typography';
+import { RADIUS, SPACING, TYPOGRAPHY } from '@/lib/constants/design';
 
 type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'ghost';
 type ButtonSize = 'sm' | 'md' | 'lg';
@@ -16,8 +23,14 @@ interface ButtonProps {
 
 const variantStyles: Record<ButtonVariant, ViewStyle> = {
   primary: { backgroundColor: COLORS.primary.DEFAULT },
-  secondary: { backgroundColor: COLORS.secondary.DEFAULT },
-  outline: { backgroundColor: 'transparent', borderWidth: 1, borderColor: COLORS.primary.DEFAULT },
+  // "secondary" was the green sage. Phase 3 maps it to a softer tinted
+  // primary surface for visual consistency with the new system.
+  secondary: { backgroundColor: COLORS.primary.lighter },
+  outline: {
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: COLORS.primary.DEFAULT,
+  },
   ghost: { backgroundColor: 'transparent' },
 };
 
@@ -29,15 +42,15 @@ const variantTextStyles: Record<ButtonVariant, TextStyle> = {
 };
 
 const sizeStyles: Record<ButtonSize, ViewStyle> = {
-  sm: { paddingHorizontal: 16, paddingVertical: 8 },
-  md: { paddingHorizontal: 24, paddingVertical: 12 },
-  lg: { paddingHorizontal: 32, paddingVertical: 16 },
+  sm: { paddingHorizontal: SPACING.lg, paddingVertical: SPACING.sm },
+  md: { paddingHorizontal: SPACING.xxl, paddingVertical: SPACING.md },
+  lg: { paddingHorizontal: SPACING.xxxl, paddingVertical: SPACING.lg },
 };
 
 const sizeTextStyles: Record<ButtonSize, TextStyle> = {
-  sm: { fontSize: FONT_SIZES.sm },
-  md: { fontSize: FONT_SIZES.base },
-  lg: { fontSize: FONT_SIZES.lg },
+  sm: TYPOGRAPHY.buttonSmall,
+  md: TYPOGRAPHY.button,
+  lg: { ...TYPOGRAPHY.button, fontSize: 17 },
 };
 
 export function Button({
@@ -63,11 +76,15 @@ export function Button({
       {loading && (
         <ActivityIndicator
           size="small"
-          color={variant === 'primary' || variant === 'secondary' ? COLORS.text.inverse : COLORS.primary.DEFAULT}
+          color={
+            variant === 'primary' || variant === 'secondary'
+              ? COLORS.text.inverse
+              : COLORS.primary.DEFAULT
+          }
           style={styles.spinner}
         />
       )}
-      <Text style={[styles.text, variantTextStyles[variant], sizeTextStyles[size]]}>
+      <Text style={[variantTextStyles[variant], sizeTextStyles[size]]}>
         {title}
       </Text>
     </TouchableOpacity>
@@ -76,7 +93,7 @@ export function Button({
 
 const styles = StyleSheet.create({
   base: {
-    borderRadius: 12,
+    borderRadius: RADIUS.md,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -85,9 +102,6 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   spinner: {
-    marginRight: 8,
-  },
-  text: {
-    fontWeight: FONT_WEIGHTS.semibold,
+    marginRight: SPACING.sm,
   },
 });

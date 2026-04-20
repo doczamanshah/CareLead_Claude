@@ -6,9 +6,11 @@ import {
   Modal,
   StyleSheet,
   SectionList,
+  ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
-import { ScreenLayout } from '@/components/ui/ScreenLayout';
+import { TabHeader } from '@/components/ui/TabHeader';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { DocumentCard } from '@/components/modules/DocumentCard';
 import { useActiveProfile } from '@/hooks/useActiveProfile';
@@ -83,49 +85,60 @@ export default function DocumentsScreen() {
     }
   }
 
-  if (isLoading) return <ScreenLayout title="Documents" loading />;
-  if (error) return <ScreenLayout title="Documents" error={error as Error} />;
-
   const sections = groupByDate(artifacts ?? []);
   const isEmpty = !artifacts || artifacts.length === 0;
 
   return (
-    <ScreenLayout title="Documents" scrollable={false}>
-      {isEmpty ? (
-        <EmptyState
-          title="No documents yet"
-          description="Capture photos, upload files, or record voice notes to get started."
-          actionTitle="Add Document"
-          onAction={() => setSheetVisible(true)}
-        />
-      ) : (
-        <SectionList
-          sections={sections}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <View style={styles.cardWrap}>
-              <DocumentCard
-                artifact={item}
-                onPress={() => handleArtifactPress(item)}
-              />
-            </View>
-          )}
-          renderSectionHeader={({ section }) => (
-            <Text style={styles.sectionHeader}>{section.title}</Text>
-          )}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
+      <TabHeader title="Documents" />
 
-      {/* Floating Add Button */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setSheetVisible(true)}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.fabIcon}>+</Text>
-      </TouchableOpacity>
+      <View style={styles.body}>
+        {isLoading ? (
+          <View style={styles.centered}>
+            <ActivityIndicator size="large" color={COLORS.primary.DEFAULT} />
+          </View>
+        ) : error ? (
+          <View style={styles.centered}>
+            <Text style={styles.errorText}>
+              {(error as Error).message || 'Could not load documents.'}
+            </Text>
+          </View>
+        ) : isEmpty ? (
+          <EmptyState
+            title="No documents yet"
+            description="Capture photos, upload files, or record voice notes to get started."
+            actionTitle="Add Document"
+            onAction={() => setSheetVisible(true)}
+          />
+        ) : (
+          <SectionList
+            sections={sections}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <View style={styles.cardWrap}>
+                <DocumentCard
+                  artifact={item}
+                  onPress={() => handleArtifactPress(item)}
+                />
+              </View>
+            )}
+            renderSectionHeader={({ section }) => (
+              <Text style={styles.sectionHeader}>{section.title}</Text>
+            )}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={false}
+          />
+        )}
+
+        {/* Floating Add Button */}
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => setSheetVisible(true)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.fabIcon}>+</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Bottom Sheet */}
       <Modal
@@ -160,11 +173,30 @@ export default function DocumentsScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
-    </ScreenLayout>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: COLORS.background.DEFAULT,
+  },
+  body: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+  },
+  centered: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  errorText: {
+    fontSize: FONT_SIZES.base,
+    color: COLORS.error.DEFAULT,
+    textAlign: 'center',
+  },
   cardWrap: {
     marginBottom: 8,
   },

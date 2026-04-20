@@ -11,7 +11,6 @@ import {
   Platform,
 } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Swipeable } from 'react-native-gesture-handler';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useQueryClient } from '@tanstack/react-query';
@@ -28,7 +27,13 @@ import {
   filterBundlesByCategory,
   filterTasksByCategory,
 } from '@/hooks/useTaskBundles';
-import { useTaskProgress } from '@/hooks/useTaskProgress';
+import {
+  useTaskProgress,
+  useStreakCelebration,
+  useWeeklySummary,
+  dismissStreakCelebration,
+  dismissWeeklySummary,
+} from '@/hooks/useTaskProgress';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Card } from '@/components/ui/Card';
 import { SmartSnoozeSheet } from '@/components/SmartSnoozeSheet';
@@ -48,8 +53,6 @@ import type {
   TaskStatus,
 } from '@/lib/types/tasks';
 
-// ── Config ─────────────────────────────────────────────────────────────────
-
 type StatusTab = 'open' | 'completed' | 'all';
 
 const STATUS_TABS: { key: StatusTab; label: string }[] = [
@@ -58,7 +61,11 @@ const STATUS_TABS: { key: StatusTab; label: string }[] = [
   { key: 'all', label: 'All' },
 ];
 
-const CATEGORY_FILTERS: { key: TaskCategoryFilter; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+const CATEGORY_FILTERS: {
+  key: TaskCategoryFilter;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
   { key: 'all', label: 'All', icon: 'apps-outline' },
   { key: 'medications', label: 'Medications', icon: 'medkit-outline' },
   { key: 'appointments', label: 'Appointments', icon: 'calendar-outline' },
@@ -77,7 +84,8 @@ const TIME_GROUP_CONFIG: {
   { key: 'when_ready', label: "When You're Ready", description: 'No rush' },
 ];
 
-const PRIORITY_COLORS: Record<TaskPriority, string> = {
+// PRIORITY_COLORS retained for reference but not currently consumed by render.
+const _PRIORITY_COLORS: Record<TaskPriority, string> = {
   urgent: COLORS.error.DEFAULT,
   high: COLORS.tertiary.DEFAULT,
   medium: COLORS.accent.dark,
@@ -92,8 +100,6 @@ const SOURCE_ICONS: Record<TaskSourceType, keyof typeof Ionicons.glyphMap> = {
   billing: 'receipt-outline',
   preventive: 'shield-checkmark-outline',
 };
-
-// ── Helpers ────────────────────────────────────────────────────────────────
 
 const PRIORITIES_INVITE_DISMISS_KEY = 'tasks.priorities_invite_dismissed_until';
 const DISMISSAL_DAYS = 7;
@@ -165,9 +171,13 @@ function ctaForTask(task: PersonalizedTask): string | null {
   return null;
 }
 
-// ── Screen ─────────────────────────────────────────────────────────────────
+interface TasksContentProps {
+  /** Show the per-screen FAB (defaults to true). Hide if the parent screen
+   *  provides its own create entry-point. */
+  showFab?: boolean;
+}
 
-export default function TasksScreen() {
+export function TasksContent({ showFab = true }: TasksContentProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const { activeProfileId, activeProfile } = useActiveProfile();
@@ -185,7 +195,6 @@ export default function TasksScreen() {
 
   useImplicitSignalRefresh(activeProfileId);
 
-  // Priorities invite card: hide for 7 days when dismissed.
   const [inviteHiddenUntil, setInviteHiddenUntil] = useState<Date | null>(null);
   useFocusEffect(
     useCallback(() => {
@@ -212,7 +221,6 @@ export default function TasksScreen() {
     await writeDismissed(until.toISOString());
   }, []);
 
-  // Run expiry scan once per profile mount — background, best-effort.
   const expiryScanRanRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeProfileId || !user?.id) return;
@@ -228,6 +236,8 @@ export default function TasksScreen() {
 
   const { data: priorities } = usePatientPriorities(activeProfileId);
   const { data: progress } = useTaskProgress(activeProfileId);
+  const streakCelebration = useStreakCelebration(progress?.streakDays ?? 0);
+  const weeklySummary = useWeeklySummary(activeProfileId);
 
   const statusFilter = useMemo<TaskStatus[] | undefined>(() => {
     if (statusTab === 'open') return ['pending', 'in_progress'];
@@ -242,7 +252,6 @@ export default function TasksScreen() {
 
   const updateStatus = useUpdateTaskStatus();
 
-  // Apply category filter
   const { filteredBundles, filteredIndividuals } = useMemo(() => {
     const sourceTypes = filterToSourceTypes(category);
     return {
@@ -251,7 +260,6 @@ export default function TasksScreen() {
     };
   }, [bundles, individuals, category]);
 
-  // Celebration animation: subtle scale-in, hold, fade-out.
   const triggerCelebration = useCallback(
     (taskId: string, bundleTitle: string | null) => {
       setCelebration({ taskId, bundleTitle });
@@ -275,7 +283,6 @@ export default function TasksScreen() {
 
   const handleComplete = useCallback(
     (taskId: string) => {
-      // Before firing the mutation, check whether this completion finishes a bundle
       const containingBundle = bundles.find((b) =>
         b.tasks.some((t) => t.id === taskId),
       );
@@ -340,8 +347,6 @@ export default function TasksScreen() {
       return next;
     });
   }, []);
-
-  // ── Render task card ─────────────────────────────────────────────────────
 
   const renderTaskCard = useCallback(
     (task: PersonalizedTask, compact = false) => {
@@ -486,14 +491,10 @@ export default function TasksScreen() {
     [router, handleComplete, handleDismiss],
   );
 
-  // ── Render bundle card ───────────────────────────────────────────────────
-
   const renderBundleCard = useCallback(
-    (bundle: TaskBundle, group: TaskTimeGroup) => {
+    (bundle: TaskBundle, _group: TaskTimeGroup) => {
       const isExpanded = expandedBundles.has(bundle.id);
       const tasksForGroup = bundle.tasks.filter((t) => {
-        // Only show tasks matching the current time group; fall back to all
-        // open tasks if nothing matches (should be rare).
         const open = t.status === 'pending' || t.status === 'in_progress';
         return open;
       });
@@ -556,8 +557,6 @@ export default function TasksScreen() {
           {isExpanded && (
             <View style={styles.bundleTasks}>
               {tasksForGroup.map((t) => {
-                // Re-wrap as PersonalizedTask (bundle holds plain Task — but the
-                // shape is compatible for rendering; we just lack the score).
                 const pt: PersonalizedTask = {
                   ...t,
                   basePriority: bundle.personalizedPriority,
@@ -597,8 +596,6 @@ export default function TasksScreen() {
     [expandedBundles, toggleBundle, renderTaskCard, router],
   );
 
-  // ── Build data per section ───────────────────────────────────────────────
-
   const sections = useMemo(() => {
     return TIME_GROUP_CONFIG.map((config) => {
       const entries = buildListEntries(
@@ -612,70 +609,102 @@ export default function TasksScreen() {
 
   const hasAnyContent = sections.some((s) => s.entries.length > 0);
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   if (!activeProfileId) {
     return (
-      <SafeAreaView style={styles.safeArea} edges={['top']}>
-        <View style={styles.titleContainer}>
-          <Text style={styles.screenTitle}>Tasks & Reminders</Text>
-        </View>
-        <View style={styles.centered}>
-          <Text style={styles.loadingText}>Select a profile to view tasks.</Text>
-        </View>
-      </SafeAreaView>
+      <View style={styles.centered}>
+        <Text style={styles.loadingText}>Select a profile to view tasks.</Text>
+      </View>
     );
   }
 
   if (isLoading) {
     return (
-      <SafeAreaView style={styles.safeArea} edges={['top']}>
-        <View style={styles.titleContainer}>
-          <Text style={styles.screenTitle}>Tasks & Reminders</Text>
-        </View>
-        <View style={styles.centered}>
-          <Text style={styles.loadingText}>Loading tasks...</Text>
-        </View>
-      </SafeAreaView>
+      <View style={styles.centered}>
+        <Text style={styles.loadingText}>Loading tasks...</Text>
+      </View>
     );
   }
 
   if (error) {
     return (
-      <SafeAreaView style={styles.safeArea} edges={['top']}>
-        <View style={styles.titleContainer}>
-          <Text style={styles.screenTitle}>Tasks & Reminders</Text>
-        </View>
-        <View style={styles.centered}>
-          <Text style={styles.errorText}>Failed to load tasks</Text>
-        </View>
-      </SafeAreaView>
+      <View style={styles.centered}>
+        <Text style={styles.errorText}>Failed to load tasks</Text>
+      </View>
     );
   }
 
   const weeklyCompleted = progress?.completedThisWeek ?? 0;
-  const weeklyProgressPct = Math.min(100, weeklyCompleted * 10); // 10 tasks = full bar
+  const weeklyProgressPct = Math.min(100, weeklyCompleted * 10);
 
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <View style={styles.titleContainer}>
-        <Text style={styles.screenTitle}>Tasks & Reminders</Text>
-        {progress && weeklyCompleted > 0 && (
-          <View style={styles.progressRow}>
-            <View style={styles.progressBar}>
-              <View
-                style={[styles.progressFill, { width: `${weeklyProgressPct}%` }]}
-              />
-            </View>
-            <Text style={styles.progressText}>
-              {weeklyCompleted} completed this week
-              {progress.streakDays >= 3 ? ` · ${progress.streakDays}d streak` : ''}
-            </Text>
+    <View style={styles.container}>
+      {progress && weeklyCompleted > 0 && (
+        <View style={styles.progressContainer}>
+          <View style={styles.progressBar}>
+            <View
+              style={[styles.progressFill, { width: `${weeklyProgressPct}%` }]}
+            />
           </View>
-        )}
-      </View>
+          <Text style={styles.progressText}>
+            {weeklyCompleted} completed this week
+            {progress.streakDays >= 3 ? ` · ${progress.streakDays}d streak` : ''}
+          </Text>
+        </View>
+      )}
 
-      {/* Status tabs */}
+      {/* Weekly summary banner — Monday-first-visit, gated per user+week */}
+      {weeklySummary && user?.id && (
+        <View style={styles.summaryBanner}>
+          <View style={styles.summaryHeader}>
+            <Ionicons name="sparkles" size={16} color={COLORS.accent.dark} />
+            <Text style={styles.summaryTitle}>
+              Last week you completed {weeklySummary.totalCount} tasks
+            </Text>
+            <TouchableOpacity
+              onPress={() => {
+                void dismissWeeklySummary(user.id, weeklySummary.weekStartIso);
+              }}
+              hitSlop={8}
+            >
+              <Ionicons name="close" size={16} color={COLORS.text.tertiary} />
+            </TouchableOpacity>
+          </View>
+          {weeklySummary.highlights.slice(0, 3).map((h) => (
+            <View key={h.id} style={styles.summaryLine}>
+              <Ionicons
+                name="checkmark"
+                size={12}
+                color={COLORS.success.DEFAULT}
+              />
+              <Text style={styles.summaryLineText} numberOfLines={1}>
+                {h.title}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Streak celebration banner — 3/7/30 day thresholds */}
+      {streakCelebration && user?.id && (
+        <TouchableOpacity
+          style={styles.streakBanner}
+          onPress={() => {
+            void dismissStreakCelebration(user.id, streakCelebration);
+          }}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="flame" size={18} color={COLORS.accent.dark} />
+          <Text style={styles.streakText}>
+            {streakCelebration === 30
+              ? 'A full month staying on top of your health!'
+              : streakCelebration === 7
+                ? "7-day streak — you're on a roll."
+                : '3-day streak — nice start!'}
+          </Text>
+          <Ionicons name="close" size={14} color={COLORS.text.tertiary} />
+        </TouchableOpacity>
+      )}
+
       <View style={styles.statusTabs}>
         {STATUS_TABS.map((tab) => (
           <TouchableOpacity
@@ -698,7 +727,6 @@ export default function TasksScreen() {
         ))}
       </View>
 
-      {/* Dismissal-fatigue banner — one-time surfacing per session */}
       {fatigueNote && statusTab === 'open' && (
         <View style={styles.fatigueBanner}>
           <Ionicons
@@ -710,7 +738,6 @@ export default function TasksScreen() {
         </View>
       )}
 
-      {/* Category filter chips */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -745,7 +772,6 @@ export default function TasksScreen() {
         ))}
       </ScrollView>
 
-      {/* Priorities card — persistent. Invite before set, compact summary after. */}
       {activeProfile && (() => {
         const hasPriorities =
           !!priorities &&
@@ -760,7 +786,6 @@ export default function TasksScreen() {
           );
 
         if (hasPriorities) {
-          // Compact summary with top chips
           const topTopics = priorities!.health_priorities
             .slice(0, 3)
             .map((hp) => hp.topic);
@@ -849,7 +874,6 @@ export default function TasksScreen() {
         );
       })()}
 
-      {/* Empty state */}
       {!hasAnyContent ? (
         <EmptyState
           title={
@@ -941,15 +965,16 @@ export default function TasksScreen() {
         />
       )}
 
-      <TouchableOpacity
-        style={styles.fab}
-        activeOpacity={0.8}
-        onPress={() => router.push('/(main)/tasks/create')}
-      >
-        <Ionicons name="add" size={28} color={COLORS.text.inverse} />
-      </TouchableOpacity>
+      {showFab && (
+        <TouchableOpacity
+          style={styles.fab}
+          activeOpacity={0.8}
+          onPress={() => router.push('/(main)/tasks/create')}
+        >
+          <Ionicons name="add" size={28} color={COLORS.text.inverse} />
+        </TouchableOpacity>
+      )}
 
-      {/* Completion celebration overlay */}
       {celebration && (
         <Animated.View
           style={[
@@ -988,31 +1013,19 @@ export default function TasksScreen() {
         onSnooze={handleSnooze}
         onMarkIrrelevant={handleMarkIrrelevant}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
-// ── Styles ─────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  safeArea: {
+  container: {
     flex: 1,
-    backgroundColor: COLORS.background.DEFAULT,
-  },
-  titleContainer: {
-    paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
-  screenTitle: {
-    fontSize: FONT_SIZES['2xl'],
-    fontWeight: FONT_WEIGHTS.bold,
-    color: COLORS.text.DEFAULT,
   },
   centered: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    padding: 24,
   },
   loadingText: {
     fontSize: FONT_SIZES.base,
@@ -1023,9 +1036,71 @@ const styles = StyleSheet.create({
     color: COLORS.error.DEFAULT,
     marginBottom: 8,
   },
+  progressContainer: {
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 4,
+    gap: 4,
+  },
+  // Weekly summary banner (moved from Home)
+  summaryBanner: {
+    marginHorizontal: 24,
+    marginTop: 8,
+    marginBottom: 4,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: COLORS.accent.DEFAULT + '14',
+    borderWidth: 1,
+    borderColor: COLORS.accent.DEFAULT + '33',
+  },
+  summaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  summaryTitle: {
+    flex: 1,
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.semibold,
+    color: COLORS.text.DEFAULT,
+  },
+  summaryLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  summaryLineText: {
+    flex: 1,
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.text.secondary,
+  },
+  // Streak celebration banner (moved from Home)
+  streakBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 24,
+    marginTop: 4,
+    marginBottom: 4,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: COLORS.accent.DEFAULT + '14',
+    borderWidth: 1,
+    borderColor: COLORS.accent.DEFAULT + '33',
+  },
+  streakText: {
+    flex: 1,
+    fontSize: FONT_SIZES.sm,
+    fontWeight: FONT_WEIGHTS.medium,
+    color: COLORS.text.DEFAULT,
+  },
   statusTabs: {
     flexDirection: 'row',
     paddingHorizontal: 24,
+    marginTop: 8,
     marginBottom: 8,
     gap: 8,
   },
@@ -1081,7 +1156,6 @@ const styles = StyleSheet.create({
     color: COLORS.primary.DEFAULT,
     fontWeight: FONT_WEIGHTS.semibold,
   },
-  // Priorities CTA (invite, shown when no priorities set)
   prioritiesCta: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1141,7 +1215,6 @@ const styles = StyleSheet.create({
     padding: 4,
     marginLeft: 4,
   },
-  // Priorities compact card (shown when priorities set)
   prioritiesCompact: {
     marginHorizontal: 24,
     marginBottom: 12,
@@ -1198,7 +1271,6 @@ const styles = StyleSheet.create({
     color: COLORS.text.tertiary,
     marginLeft: 2,
   },
-  // Priority boost badge on tasks
   priorityBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1213,7 +1285,6 @@ const styles = StyleSheet.create({
     fontWeight: FONT_WEIGHTS.semibold,
     color: COLORS.primary.DEFAULT,
   },
-  // Sections
   listContent: {
     paddingHorizontal: 24,
     paddingBottom: 100,
@@ -1254,7 +1325,6 @@ const styles = StyleSheet.create({
   sectionChevron: {
     marginLeft: 4,
   },
-  // Task card
   taskCard: {
     marginBottom: 8,
   },
@@ -1363,7 +1433,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginLeft: 8,
   },
-  // Bundle
   bundleContainer: {
     marginBottom: 10,
     backgroundColor: COLORS.surface.DEFAULT,
@@ -1454,7 +1523,6 @@ const styles = StyleSheet.create({
     color: COLORS.primary.DEFAULT,
     marginRight: 4,
   },
-  // Swipe
   swipeComplete: {
     backgroundColor: COLORS.success.DEFAULT,
     justifyContent: 'center',
@@ -1489,11 +1557,6 @@ const styles = StyleSheet.create({
     fontWeight: FONT_WEIGHTS.semibold,
     fontSize: FONT_SIZES.sm,
   },
-  // Progress
-  progressRow: {
-    marginTop: 6,
-    gap: 4,
-  },
   progressBar: {
     height: 4,
     borderRadius: 2,
@@ -1523,7 +1586,6 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.xs,
     color: COLORS.text.secondary,
   },
-  // Celebration overlay
   celebration: {
     position: 'absolute',
     top: 0,
@@ -1542,7 +1604,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 32,
   },
-  // FAB
   fab: {
     position: 'absolute',
     bottom: 24,
